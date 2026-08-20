@@ -56,13 +56,13 @@
 <div class="app">
   <div class="left">
     <div class="card" style="padding:0;overflow:hidden">
-      <div id="drop" class="drop">
+      <label id="drop" for="file" class="drop" style="display:block;cursor:pointer">
         <div class="big">📦</div>
-        <div style="font-weight:600;color:var(--text)">Choose your .Item.Gbx</div><button id="chooseBtn" class="primary" style="margin-top:10px;width:auto;padding:8px 16px">📂 Browse files</button><div class="mini" style="margin-top:8px">or drop file here</div>
+        <div style="font-weight:600;color:var(--text)">Choose your .Item.Gbx</div><label for="file" id="chooseBtn" class="primary" style="display:inline-block;text-align:center;cursor:pointer" style="margin-top:10px;width:auto;padding:8px 16px">📂 Browse files</label><div class="mini" style="margin-top:8px">or drop file here</div>
         <div class="mini" style="margin-top:4px">or click to browse – works with Rotating Balloons, Moving Duck, etc.</div>
         <div class="mini" style="margin-top:8px">We read it entirely in your browser, nothing leaves your PC</div>
-      </div>
-      <input id="file" type="file" accept=".gbx,.Gbx,.Item.Gbx" style="position:absolute;left:-9999px;top:-9999px;opacity:0"/>
+      </label>
+      <input id="file" type="file" accept=".gbx,.Gbx,.Item.Gbx" style="position:absolute;opacity:0;width:0;height:0;pointer-events:none"/>
       <div style="padding:10px">
         <div id="status" class="status">Waiting for file…</div>
         <div class="mini" id="meta"></div>
@@ -145,13 +145,6 @@ import { decompress } from './lzo.js';
 
 const $=id=>document.getElementById(id);
 
-// Fix file picker - direct click handler, no drag dependency
-const fileInputEl=document.getElementById('file');
-const chooseBtn=document.getElementById('chooseBtn');
-const dropEl=document.getElementById('drop');
-if(chooseBtn){ chooseBtn.addEventListener('click',(e)=>{ e.stopPropagation(); fileInputEl.click(); }); }
-if(dropEl){ dropEl.addEventListener('click',()=>{ fileInputEl.click(); }); }
-if(fileInputEl){ fileInputEl.addEventListener('click',(e)=>{ e.stopPropagation(); }); }
 
 const drop=$('drop'), fileInput=$('file'), statusEl=$('status'), metaEl=$('meta');
 const transY=$('transY'), transP=$('transP'), transEase=$('transEase'), rotA=$('rotA'), rotP=$('rotP'), axisSel=$('axis'), rotEase=$('rotEase');
@@ -173,7 +166,7 @@ function parseGBX(u8){
   return {hdrEnd,bPtr,uncomp,comp,cStart,cEnd};
 }
 
-drop.addEventListener('click',()=>fileInput.click());
+// native label handles picker
 drop.addEventListener('dragover',e=>{e.preventDefault(); drop.classList.add('drag')});
 drop.addEventListener('dragleave',()=>drop.classList.remove('drag'));
 drop.addEventListener('drop',e=>{e.preventDefault(); drop.classList.remove('drag'); const f=e.dataTransfer.files[0]; if(f) loadFile(f);});
