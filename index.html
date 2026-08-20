@@ -2,296 +2,448 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
-<title>GBX Moving Item Editor – Dors</title>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Item Move Studio – GBX Editor</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
 <style>
-  :root{--bg:#0f1115;--card:#171a21;--mut:#8a92a3;--acc:#7ee787;--acc2:#7ab2ff}
-  body{margin:0;font-family:ui-sans,system-ui,sans-serif;background:var(--bg);color:#e6edf3}
-  header{padding:18px 22px;border-bottom:1px solid #222;display:flex;justify-content:space-between;align-items:center}
-  h1{margin:0;font-size:18px;letter-spacing:.2px}
-  h1 span{color:var(--acc);font-weight:700}
-  .wrap{display:grid;grid-template-columns:320px 1fr;min-height:calc(100vh - 57px)}
-  .side{border-right:1px solid #222;padding:16px;overflow:auto}
-  .main{padding:16px;display:flex;flex-direction:column;gap:16px;overflow:auto}
-  .card{background:var(--card);border:1px solid #232a35;border-radius:12px;padding:14px}
-  .drop{border:2px dashed #2a3446;border-radius:12px;padding:18px;text-align:center;color:var(--mut);cursor:pointer}
-  .drop.drag{background:#1b2332;border-color:var(--acc2)}
-  label{display:block;font-size:12px;color:var(--mut);margin:8px 0 4px}
-  input,select,button{width:100%;padding:8px 10px;border-radius:8px;border:1px solid #2a3446;background:#0f131a;color:#e6edf3;font-size:13px}
-  button{cursor:pointer;background:#1e2b3e;border-color:#2e425f}
-  button.primary{background:var(--acc2);color:#081120;border-color:#5d9cff;font-weight:600}
-  button:disabled{opacity:.5;cursor:not-allowed}
-  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-  .mono{font-family:ui-monospace,Menlo,monospace;font-size:12px;white-space:pre-wrap;word-break:break-all;background:#0b0e13;padding:8px;border-radius:8px;border:1px solid #1f2837;max-height:200px;overflow:auto}
-  canvas{width:100%;height:160px;background:#0b0e13;border:1px solid #232a35;border-radius:10px}
-  .track{border-left:3px solid var(--acc2);padding:8px 10px;margin:8px 0;background:#121720;border-radius:0 8px 8px 0}
-  .track.rot{border-color:var(--acc)}
-  .pill{display:inline-block;font-size:11px;padding:2px 7px;border-radius:999px;background:#1d2a3d;color:#9ab5d6;margin-right:6px}
-  .status{font-size:12px;color:var(--mut);padding:6px 0}
-  .progress{height:4px;background:#1d2636;border-radius:999px;overflow:hidden;margin:6px 0}
-  .progress i{display:block;height:100%;width:0;background:var(--acc2);transition:width .2s}
+  :root{--bg:#0b0f14;--panel:#121820;--panel2:#17202e;--line:#1e2e46;--text:#e8f0fe;--mut:#8ea2bd;--accent:#7ee787;--accent2:#7ab2ff;--warn:#ffbf6a}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,sans-serif;overflow:hidden}
+  header{height:56px;display:flex;align-items:center;justify-content:space-between;padding:0 18px;border-bottom:1px solid var(--line);background:#0e141e}
+  header h1{font-size:16px;margin:0;letter-spacing:.2px}
+  header h1 b{color:var(--accent2)}
+  .app{display:grid;grid-template-columns:380px 1fr ;height:calc(100vh - 56px)}
+  .left{border-right:1px solid var(--line);overflow:auto;background:var(--panel);padding:16px;display:flex;flex-direction:column;gap:14px}
+  .right{overflow:auto;padding:16px;display:flex;flex-direction:column;gap:16px;background:radial-gradient(900px 600px at 60% -10%, #14223a 0%, transparent 60%), var(--bg)}
+  .card{background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:12px}
+  .drop{border:2px dashed #2b4263;border-radius:14px;padding:20px;text-align:center;color:var(--mut);cursor:pointer;background:#121e31;transition:.15s}
+  .drop.drag{border-color:var(--accent2);background:#162a4a;color:var(--text)}
+  .drop .big{font-size:30px;margin-bottom:6px}
+  label{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.6px;margin:8px 0 4px;display:block}
+  input,select,button{width:100%;padding:9px 10px;border-radius:10px;border:1px solid #2a3f61;background:#0e1726;color:var(--text);font-size:13px}
+  input[type=range]{padding:0;height:28px}
+  button{cursor:pointer;background:#1a2d4d}
+  button.primary{background:linear-gradient(180deg,#8ec0ff,#5e9eff);color:#081023;border-color:#7eb1ff;font-weight:600}
+  button.ghost{background:transparent}
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .pill{display:inline-flex;gap:6px;align-items:center;padding:4px 10px;border-radius:999px;background:#1c2e4f;color:#9ec0ee;font-size:11px}
+  .mini{font-size:11px;color:var(--mut)}
+  .divider{height:1px;background:var(--line);margin:10px 0}
+  .track{border-left:3px solid var(--accent2);background:#13213a;border-radius:0 12px 12px 0;padding:10px;margin:8px 0;position:relative}
+  .track.rot{border-color:var(--accent)}
+  .track .head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+  .canvasWrap{position:relative;border:1px solid var(--line);border-radius:14px;overflow:hidden;background:linear-gradient(180deg,#0d182a,#0a1220);height:420px}
+  canvas{width:100%;height:100%;display:block}
+  .overlay{position:absolute;left:12px;top:12px;display:flex;gap:8px;flex-wrap:wrap}
+  .timeline{height:86px;border:1px solid var(--line);border-radius:12px;background:#0e192d;display:flex;align-items:center;padding:8px;gap:6px;overflow:auto}
+  .block{height:56px;min-width:70px;border-radius:9px;display:flex;flex-direction:column;justify-content:center;padding:6px 8px;font-size:11px;position:relative}
+  .block.t{background:#1f3a66;border:1px solid #2f5aa0}
+  .block.r{background:#204a33;border:1px solid #357c54}
+  .help{font-size:12px;color:var(--mut);line-height:1.5}
+  .rangeRow{display:flex;gap:8px;align-items:center}
+  .rangeRow span{font-size:11px;color:var(--mut);min-width:36px}
+  .status{font-size:12px;color:var(--mut)}
 </style>
+<script type="importmap">
+{ "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+</script>
 </head>
 <body>
 <header>
-  <h1><span>GBX</span> Moving Item Editor</h1>
-  <div style="font-size:12px;color:var(--mut)">No-worker fast path – chunked, keeps UI alive</div>
+  <h1><b>Item Move Studio</b> – make Trackmania items move without code</h1>
+  <div style="display:flex;gap:8px;align-items:center"><span class="pill">✨ web-like chaining</span><a href="https://github.com/giuliojiang/itemgbxeasing" target="_blank" style="color:var(--mut);font-size:12px">GitHub</a></div>
 </header>
-<div class="wrap">
-  <div class="side">
-    <div class="card">
-      <div id="drop" class="drop">Drop .Item.Gbx here or click<br><span style="font-size:11px">zzz_RotBalloons / MovingDuck / Santa</span></div>
+<div class="app">
+  <div class="left">
+    <div class="card" style="padding:0;overflow:hidden">
+      <div id="drop" class="drop">
+        <div class="big">📦</div>
+        <div style="font-weight:600;color:var(--text)">Drop your .Item.Gbx here</div>
+        <div class="mini" style="margin-top:4px">or click to browse – works with Rotating Balloons, Moving Duck, etc.</div>
+        <div class="mini" style="margin-top:8px">We read it entirely in your browser, nothing leaves your PC</div>
+      </div>
       <input id="file" type="file" accept=".gbx,.Gbx" style="display:none"/>
-      <div class="progress"><i id="prog"></i></div>
-      <div id="status" class="status">Idle – ready for GitHub Pages</div>
-      <div id="info" class="mono" style="margin-top:8px">No file loaded.</div>
-      <label>Detected mover candidates</label>
-      <select id="cands"></select>
-      <div id="moverCard" style="display:none;margin-top:10px">
-        <div style="font-size:12px;color:var(--mut)">Mover @ <span id="moff"></span></div>
-        <label>Version</label><input id="mv_ver" type="number" min="0" max="6" step="1"/>
-        <div class="grid2">
-          <div><label>RotPeriod</label><input id="mv_rotP" type="number" step="1"/></div>
-          <div><label>TransPeriod</label><input id="mv_transP" type="number" step="1"/></div>
-        </div>
-        <label>TransY</label><input id="mv_transY" type="number" step="0.01"/>
-        <div class="grid2">
-          <div><label>Axis</label><input id="mv_axis" type="number" min="0" max="2" step="1"/></div>
-          <div><label>RotAngle rad</label><input id="mv_rotAng" type="number" step="0.01"/></div>
-        </div>
-        <div class="grid2">
-          <div><label>RotPeriodMax</label><input id="mv_rotMax" type="number" step="1"/></div>
-          <div><label>TransPeriodMax</label><input id="mv_transMax" type="number" step="1"/></div>
-        </div>
-        <label>RotFunc</label><input id="mv_rotFunc" type="number" min="0" max="10" step="1"/>
-        <button id="applyMover" class="primary" style="margin-top:10px">Apply to buffer</button>
+      <div style="padding:10px">
+        <div id="status" class="status">Waiting for file…</div>
+        <div class="mini" id="meta"></div>
       </div>
     </div>
-    <div class="card" style="margin-top:12px">
-      <div style="font-weight:600;font-size:13px;margin-bottom:8px">Web-like Chains</div>
-      <div id="tracks"></div>
-      <div class="grid2" style="margin-top:8px"><button id="addT">+ Translate</button><button id="addR">+ Rotate</button></div>
-      <label>Compose</label><select id="compose"><option value="parallel">Parallel – combine</option><option value="sequence">Sequence – chain</option></select>
-      <canvas id="preview" width="640" height="200"></canvas>
-      <button id="bake" style="margin-top:8px">Bake → mover</button>
-      <div id="bakeLog" class="mono" style="margin-top:8px"></div>
+
+    <div class="card" id="presetsCard" style="display:none">
+      <div style="font-weight:600;margin-bottom:6px">🎨 Quick start – pick a style</div>
+      <div class="row2">
+        <button data-preset="float">☁️ Gentle float</button>
+        <button data-preset="spin">🌀 Spin</button>
+        <button data-preset="both">🛸 Orbit + float</button>
+        <button data-preset="pendulum">🔔 Pendulum</button>
+      </div>
+      <div class="help" style="margin-top:8px">These set the periods & angles for you. You can tweak below – preview updates instantly.</div>
     </div>
-    <div class="card" style="margin-top:12px">
-      <button id="export" class="primary" disabled>Export .Item.Gbx (BUUR uncompressed)</button>
-      <button id="exportBin" style="margin-top:8px" disabled>Export .bin</button>
+
+    <div class="card" id="tweakCard" style="display:none">
+      <div style="display:flex;justify-content:space-between;align-items:center"><div style="font-weight:600">🎚️ Movement</div><button id="autoFix" class="ghost" style="width:auto;font-size:11px">Auto-detect fix</button></div>
+
+      <label>Move type</label>
+      <select id="moveType"><option value="trans">Translate only (up/down)</option><option value="rot">Rotate only</option><option value="both" selected>Both – like web transform</option></select>
+
+      <div id="transBox">
+        <label>↕️ Float height <span id="transYv" class="pill" style="float:right"></span></label>
+        <div class="rangeRow"><span>low</span><input id="transY" type="range" min="0" max="8" step="0.05"/><span>high</span></div>
+        <label>⏱️ Float period <span id="transPv" class="pill" style="float:right"></span></label>
+        <div class="rangeRow"><span>fast</span><input id="transP" type="range" min="100" max="12000" step="50"/><span>slow</span></div>
+        <select id="transEase"><option value="easeInOut">Smooth (sin)</option><option value="linear">Constant</option><option value="spring">Springy</option></select>
+      </div>
+
+      <div id="rotBox" style="margin-top:10px">
+        <label>🔄 Spin amount <span id="rotAv" class="pill" style="float:right"></span></label>
+        <div class="rangeRow"><span>small</span><input id="rotA" type="range" min="0" max="6.28" step="0.05"/><span>full</span></div>
+        <label>⏱️ Spin period <span id="rotPv" class="pill" style="float:right"></span></label>
+        <div class="rangeRow"><span>fast</span><input id="rotP" type="range" min="100" max="16000" step="50"/><span>slow</span></div>
+        <label>Axis</label>
+        <select id="axis"><option value="1">Y – like a carousel</option><option value="0">X – tumble forward</option><option value="2">Z – roll</option></select>
+        <select id="rotEase" style="margin-top:6px"><option value="linear">Constant spin</option><option value="easeInOut">Ease in/out</option><option value="spring">Elastic</option></select>
+      </div>
+
+      <div class="divider"></div>
+      <label>🎛️ Advanced GBX values (auto-synced)</label>
+      <div class="row2"><div><label>RotFunc</label><select id="rotFunc"><option value="0">0 linear</option><option value="1">1 smooth</option><option value="2">2 spring</option><option value="3">3 bounce</option></select></div><div><label>Version</label><input id="ver" type="number" min="0" max="3"/></div></div>
+      <div class="mini" style="margin-top:6px">Tip: Leave these alone unless your item glitches in-game.</div>
+    </div>
+
+    <div class="card" id="chainCard" style="display:none">
+      <div style="font-weight:600">🔗 Chain – web animations style</div>
+      <div class="help">Each block is an interpolation, like CSS <code>@keyframes</code>. Put them in parallel (together) or in sequence (one after another). Preview blends them live.</div>
+      <div id="tracks"></div>
+      <div class="row2" style="margin-top:8px"><button id="addT">+ Float block</button><button id="addR">+ Spin block</button></div>
+      <label>Blend mode</label><select id="blend"><option value="parallel">Parallel – combine transforms</option><option value="sequence">Sequence – chain with delays</option></select>
+    </div>
+
+    <div class="card" id="exportCard" style="display:none">
+      <button id="export" class="primary">💾 Save moving item – .Item.Gbx</button>
+      <button id="exportBin" style="margin-top:8px">Export debug .bin</button>
+      <div class="help" style="margin-top:8px">Saved file is uncompressed BUUR – Trackmania loads it fine. Keep a backup of the original.</div>
+      <div id="bakeLog" class="mini" style="margin-top:6px"></div>
     </div>
   </div>
-  <div class="main">
-    <div class="card">
-      <div style="font-weight:600">Timeline</div>
-      <div id="vis" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px">
-        <div><div style="font-size:12px;color:var(--mut)">TranslateY</div><canvas id="cvT" width="500" height="160"></canvas></div>
-        <div><div style="font-size:12px;color:var(--mut)">Rotate</div><canvas id="cvR" width="500" height="160"></canvas></div>
-      </div>
+  <div class="right">
+    <div class="canvasWrap">
+      <canvas id="three"></canvas>
+      <div class="overlay"><span class="pill" id="livePill">● live preview</span><span class="pill" id="fpsPill">fps –</span><span class="pill" id="foundPill">no file</span></div>
+      <div style="position:absolute;right:12px;top:12px;display:flex;gap:6px"><button id="play" style="width:auto">⏸️ Pause</button><button id="reset" style="width:auto">↺ Reset view</button></div>
     </div>
-    <div class="card">
-      <div style="font-weight:600;margin-bottom:6px">Body preview (virtual hex – fast)</div>
-      <div id="hex" class="mono" style="max-height:420px"></div>
+    <div class="timeline" id="timeline"><div class="mini">Your chain will appear here – blocks stretch by duration. Drag is not needed, just add blocks on the left.</div></div>
+    <div class="row2">
+      <div class="card"><div style="font-weight:600">What am I editing?</div><div class="help" id="explain">Drop a file to see. Your item has a tiny hidden box called <code>CPlugAnimLocSimple</code> with 9 numbers: how fast it spins (<code>RotPeriod</code>), how much it floats (<code>TransY</code>), which axis, etc. We make that friendly with sliders. The game loops those forever – so chaining is simulated by baking your blocks into one loop.</div></div>
+      <div class="card"><div style="font-weight:600">How chaining works (like web UI)</div><div class="help">In web animations you do <code>element.animate([...], {duration, easing})</code> and combine with <code>Promise.all([anim1, anim2])</code> for parallel or <code>await anim1.finished; anim2.play()</code> for sequence. Here we do the same: each block is an <code>interpolation</code> with <code>from → to</code>, <code>duration</code>, <code>easing</code>. Parallel = add their transforms, Sequence = offset start by previous duration. Bake = compress to the single GBX oscillator.</div></div>
     </div>
   </div>
 </div>
-<script type="module">
-import { decompress } from './lzo.js';
-const $=id=>document.getElementById(id);
-const prog=$('prog'), statusEl=$('status');
-function setStatus(s){ statusEl.textContent=s; }
-function setProg(p){ prog.style.width=(p*100).toFixed(1)+'%'; }
 
-// LZO is synchronous but fast (~10-40ms for 900KB). We yield to UI with scheduler.
-async function decompressYielding(comp, outLen){
-  setStatus('Decompressing '+comp.length+' → '+outLen+' ...');
-  setProg(0.3);
-  // break into microtask to paint progress
-  await new Promise(r=>setTimeout(r, 16));
-  const t0=performance.now();
-  let out;
-  try{
-    out = decompress(comp, outLen);
-  }catch(e){
-    console.error(e);
-    throw e;
-  }
-  const ms=(performance.now()-t0)|0;
-  setStatus('Decompressed in '+ms+'ms');
-  setProg(0.7);
-  await new Promise(r=>setTimeout(r, 10));
-  return out;
-}
+<script type="module">
+import * as THREE from 'three';
+import { decompress } from './lzo.js';
+
+const $=id=>document.getElementById(id);
+const drop=$('drop'), fileInput=$('file'), statusEl=$('status'), metaEl=$('meta');
+const transY=$('transY'), transP=$('transP'), transEase=$('transEase'), rotA=$('rotA'), rotP=$('rotP'), axisSel=$('axis'), rotEase=$('rotEase');
+const transYv=$('transYv'), transPv=$('transPv'), rotAv=$('rotAv'), rotPv=$('rotPv');
+const verIn=$('ver'), rotFunc=$('rotFunc'), moveType=$('moveType');
+
+let origBytes=null, bodyPtr=0, decomp=null, moverOff=-1, baseMover=null;
+let tracks=[]; // {id,type:'t'|'r',from,to,dur,delay,ease,axis}
 
 function readU32(b,o){return (b[o]|b[o+1]<<8|b[o+2]<<16|b[o+3]<<24)>>>0;}
 function parseGBX(u8){
   if(String.fromCharCode(...u8.slice(0,3))!=='GBX') throw new Error('Not GBX');
-  const fmt=String.fromCharCode(...u8.slice(5,9));
-  const classId=readU32(u8,9);
   const userSize=readU32(u8,13);
   const hdrEnd=17+userSize;
-  const numNodes=readU32(u8,hdrEnd);
-  const numExt=readU32(u8,hdrEnd+4);
   const bPtr=hdrEnd+8;
   const uncomp=readU32(u8,bPtr);
   const comp=readU32(u8,bPtr+4);
   const cStart=bPtr+8, cEnd=cStart+comp;
-  return {fmt,classId,hdrEnd,numNodes,numExt,bPtr,uncomp,comp,cStart,cEnd};
+  return {hdrEnd,bPtr,uncomp,comp,cStart,cEnd};
 }
 
-let origFileBytes=null, decomp=null, bodyPtr=0, moverCandidates=[], selectedIdx=-1;
-
-const drop=$('drop'), fileInput=$('file');
 drop.addEventListener('click',()=>fileInput.click());
-drop.addEventListener('dragover',e=>{e.preventDefault(); drop.classList.add('drag');});
+drop.addEventListener('dragover',e=>{e.preventDefault(); drop.classList.add('drag')});
 drop.addEventListener('dragleave',()=>drop.classList.remove('drag'));
-drop.addEventListener('drop',e=>{e.preventDefault(); drop.classList.remove('drag'); const f=e.dataTransfer.files[0]; if(f) handleFile(f);});
-fileInput.addEventListener('change',e=>{ const f=e.target.files[0]; if(f) handleFile(f);});
+drop.addEventListener('drop',e=>{e.preventDefault(); drop.classList.remove('drag'); const f=e.dataTransfer.files[0]; if(f) loadFile(f);});
+fileInput.addEventListener('change',e=>{ const f=e.target.files[0]; if(f) loadFile(f);});
 
-async function handleFile(f){
-  setStatus('Reading '+f.name+' ...');
-  setProg(0.1);
+async function loadFile(f){
+  statusEl.textContent='Reading '+f.name+' …';
   const ab=await f.arrayBuffer();
-  origFileBytes=new Uint8Array(ab);
+  origBytes=new Uint8Array(ab);
   try{
-    const p=parseGBX(origFileBytes);
+    const p=parseGBX(origBytes);
     bodyPtr=p.bPtr;
-    setStatus(`Header OK fmt ${p.fmt} nodes ${p.numNodes} uncomp ${p.uncomp} – decompressing...`);
-    const compBytes=origFileBytes.slice(p.cStart,p.cEnd);
-    const out = await decompressYielding(compBytes, p.uncomp);
+    statusEl.textContent='Decompressing…';
+    await new Promise(r=>setTimeout(r,16));
+    const comp=origBytes.slice(p.cStart,p.cEnd);
+    const out=decompress(comp,p.uncomp);
     decomp=out;
-    setStatus(`Decomp OK ${out.length} – scanning (chunked)...`);
-    setProg(0.8);
-    const cand = await scanMoversChunked(out, 50);
-    moverCandidates=cand;
-    const sel=$('cands'); sel.innerHTML='';
-    cand.forEach((c,i)=>{ const o=document.createElement('option'); o.value=i; o.textContent=`#${i} @${c.off} rotP${c.rotP} transP${c.transP} a${c.axis}`; sel.appendChild(o); });
-    if(cand.length) selectCand(0);
-    renderHexFast();
-    $('export').disabled=false; $('exportBin').disabled=false;
-    $('info').textContent=`File ${f.name} ${ab.byteLength} → decomp ${out.length}\nCandidates ${cand.length}`;
-    buildTracksUI();
-  }catch(e){ setStatus('Error: '+e.message); console.error(e); }
-  setProg(1); setTimeout(()=>setProg(0),600);
+    statusEl.textContent='Scanned '+out.length+' bytes – looking for mover…';
+    const found=await findMover(out);
+    baseMover=found;
+    moverOff=found.off;
+    $('foundPill').textContent='found @'+moverOff+' ver'+found.ver;
+    metaEl.textContent=f.name+' '+ab.byteLength+' → decomp '+out.length+' – RotP '+found.rotP+' TransP '+found.transP;
+    // populate UI
+    $('presetsCard').style.display='block';
+    $('tweakCard').style.display='block';
+    $('chainCard').style.display='block';
+    $('exportCard').style.display='block';
+    transY.value=Math.min(8, Math.abs(found.transY)||1.5);
+    transP.value=found.transP||2000;
+    rotP.value=found.rotP||4000;
+    rotA.value=Math.min(6.28, Math.abs(found.rotAng)||1.57);
+    axisSel.value=found.axis||1;
+    verIn.value=found.ver||2;
+    rotFunc.value=found.rotFunc||0;
+    renderSliders();
+    applyPreset('float', false);
+    if(found.rotP>0 && found.transP===0) applyPreset('spin', false);
+    if(found.rotP>0 && found.transP>0) applyPreset('both', false);
+    buildTracksFromMover(found);
+    statusEl.textContent='Ready – drag sliders, watch the 3D balloon';
+  }catch(e){ statusEl.textContent='Error: '+e.message; console.error(e); }
 }
 
-// chunked scanner – yields every 16k steps so UI never freezes for minutes
-async function scanMoversChunked(buf, maxCand){
+async function findMover(buf){
   const dv=new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
-  const cand=[];
-  let off=0;
-  const CHUNK=16384;
-  while(off<buf.length-32 && cand.length<maxCand){
-    const end=Math.min(off+CHUNK, buf.length-32);
-    for(; off<end; off++){
-      const ver=dv.getInt32(off,true);
-      if(ver<0||ver>3) continue;
-      const rotP=dv.getInt32(off+4,true), transP=dv.getInt32(off+8,true);
-      if(rotP<0||rotP>500000||transP<0||transP>500000) continue;
-      const transY=dv.getFloat32(off+12,true); if(Math.abs(transY)>500) continue;
-      const axis=dv.getInt32(off+16,true); if(axis<0||axis>5) continue;
-      const rotMax=dv.getInt32(off+20,true), transMax=dv.getInt32(off+24,true);
-      if(rotMax<0||rotMax>500000||transMax<0||transMax>500000) continue;
-      const rotFunc=buf[off+28]; if(rotFunc>10) continue;
-      if(rotP===0&&transP===0) continue;
-      const rotAng=dv.getFloat32(off+29,true); if(Math.abs(rotAng)>1000) continue;
-      cand.push({off,ver,rotP,transP,transY,axis,rotMax,transMax,rotFunc,rotAng});
-      if(cand.length>=maxCand) break;
-    }
-    if(off % (CHUNK*4) === 0){
-      setStatus(`Scanning @${off}/${buf.length} – ${cand.length} found…`);
-      await new Promise(r=>setTimeout(r,0)); // yield
-    }
+  // scan chunked to stay snappy
+  for(let off=0; off<buf.length-32; off++){
+    const ver=dv.getInt32(off,true); if(ver<0||ver>3) continue;
+    const rotP=dv.getInt32(off+4,true), transP=dv.getInt32(off+8,true);
+    if(rotP<0||rotP>500000||transP<0||transP>500000) continue;
+    const transY=dv.getFloat32(off+12,true); if(Math.abs(transY)>30) continue;
+    const axis=dv.getInt32(off+16,true); if(axis<0||axis>2) continue;
+    const rotMax=dv.getInt32(off+20,true), transMax=dv.getInt32(off+24,true);
+    if(rotMax<0||rotMax>500000||transMax<0||transMax>500000) continue;
+    const rf=buf[off+28]; if(rf>10) continue;
+    if(rotP===0&&transP===0) continue;
+    const ra=dv.getFloat32(off+29,true); if(Math.abs(ra)>10) continue;
+    // bonus: prefer near middle where edition chunk lives
+    if(off>500 && off<buf.length*0.9)
+      return {off,ver,rotP,transP,transY,axis,rotMax,transMax,rotFunc:rf,rotAng:ra};
   }
-  setStatus(`Scan done – ${cand.length} candidates`);
-  return cand;
+  throw new Error('No mover found – might be a static item');
 }
 
-function selectCand(i){
-  selectedIdx=i; const c=moverCandidates[i]; if(!c) return;
-  $('moverCard').style.display='block';
-  $('moff').textContent=c.off;
-  $('mv_ver').value=c.ver; $('mv_rotP').value=c.rotP; $('mv_transP').value=c.transP;
-  $('mv_transY').value=c.transY; $('mv_axis').value=c.axis; $('mv_rotMax').value=c.rotMax;
-  $('mv_transMax').value=c.transMax; $('mv_rotFunc').value=c.rotFunc; $('mv_rotAng').value=c.rotAng;
+function renderSliders(){
+  transYv.textContent=parseFloat(transY.value).toFixed(2)+' m';
+  transPv.textContent=Math.round(transP.value)+' ms';
+  rotAv.textContent=(parseFloat(rotA.value).toFixed(2)+' rad ≈ '+(parseFloat(rotA.value)*180/Math.PI|0)+'°');
+  rotPv.textContent=Math.round(rotP.value)+' ms';
 }
-$('cands').addEventListener('change',e=>selectCand(parseInt(e.target.value)));
+[transY,transP,rotA,rotP].forEach(el=>el.addEventListener('input',()=>{ renderSliders(); updatePreviewParams(); }));
+[transEase,rotEase,axisSel,moveType,rotFunc,verIn].forEach(el=>el.addEventListener('change',()=>updatePreviewParams()));
 
-$('applyMover').addEventListener('click',()=>{
-  if(selectedIdx<0||!decomp) return;
-  const c=moverCandidates[selectedIdx];
-  const dv=new DataView(decomp.buffer);
-  dv.setInt32(c.off, parseInt($('mv_ver').value)||0,true);
-  dv.setInt32(c.off+4, parseInt($('mv_rotP').value)||0,true);
-  dv.setInt32(c.off+8, parseInt($('mv_transP').value)||0,true);
-  dv.setFloat32(c.off+12, parseFloat($('mv_transY').value)||0,true);
-  dv.setInt32(c.off+16, parseInt($('mv_axis').value)||0,true);
-  dv.setInt32(c.off+20, parseInt($('mv_rotMax').value)||0,true);
-  dv.setInt32(c.off+24, parseInt($('mv_transMax').value)||0,true);
-  decomp[c.off+28]=parseInt($('mv_rotFunc').value)||0;
-  dv.setFloat32(c.off+29, parseFloat($('mv_rotAng').value)||0,true);
-  renderHexFast(c.off);
-  setStatus('Patched @'+c.off);
-});
+function applyPreset(k, announce=true){
+  if(k==='float'){ moveType.value='trans'; transY.value=2; transP.value=2500; transEase.value='easeInOut'; rotP.value=0; }
+  else if(k==='spin'){ moveType.value='rot'; rotA.value=3.14; rotP.value=3000; axisSel.value=1; rotEase.value='linear'; transP.value=0; }
+  else if(k==='both'){ moveType.value='both'; transY.value=1.4; transP.value=3200; rotA.value=1.57; rotP.value=5000; }
+  else if(k==='pendulum'){ moveType.value='rot'; rotA.value=0.6; rotP.value=1800; rotEase.value='spring'; }
+  renderSliders();
+  if(announce) updatePreviewParams();
+}
+document.querySelectorAll('[data-preset]').forEach(b=>b.addEventListener('click',()=>applyPreset(b.dataset.preset)));
 
-// Virtual hex – only renders visible window, not whole file
-function renderHexFast(h=-1){
-  if(!decomp) return;
-  const start=h>=0?Math.max(0,h-128):0;
-  const len=Math.min(1024, decomp.length-start);
-  let lines=[];
-  for(let i=0;i<len;i+=16){
-    const off=start+i;
-    let hex=''; let asc='';
-    for(let j=0;j<16 && off+j<decomp.length;j++){ const b=decomp[off+j]; hex+=b.toString(16).padStart(2,'0')+' '; asc+=(b>=32&&b<127)?String.fromCharCode(b):'.'; }
-    const mark=h>=0 && off<=h && h<off+16 ? '>>' : '  ';
-    lines.push(`${mark} ${String(off).padStart(7)}  ${hex.padEnd(48)} ${asc}`);
+function updatePreviewParams(){
+  if(moverOff<0 || !decomp) return;
+  // sync advanced
+  const dv=new DataView(decomp.buffer, decomp.byteOffset);
+  dv.setInt32(moverOff, parseInt(verIn.value)||0,true);
+  dv.setInt32(moverOff+4, Math.round(rotP.value)||0,true);
+  dv.setInt32(moverOff+8, Math.round(transP.value)||0,true);
+  dv.setFloat32(moverOff+12, parseFloat(transY.value)||0,true);
+  dv.setInt32(moverOff+16, parseInt(axisSel.value)||0,true);
+  dv.setInt32(moverOff+20, Math.round(rotP.value)||0,true);
+  dv.setInt32(moverOff+24, Math.round(transP.value)||0,true);
+  decomp[moverOff+28]=parseInt(rotFunc.value)||0;
+  dv.setFloat32(moverOff+29, parseFloat(rotA.value)||0,true);
+  // update live viz
+  previewParams = {
+    transY: parseFloat(transY.value)||0,
+    transP: parseFloat(transP.value)||0,
+    transEase: transEase.value,
+    rotA: parseFloat(rotA.value)||0,
+    rotP: parseFloat(rotP.value)||0,
+    rotEase: rotEase.value,
+    axis: parseInt(axisSel.value)||1,
+    type: moveType.value
+  };
+  // if chain mode, bake tracks too but keep simple preview優先 chain?
+  if(tracks.length){
+    // blended preview will use tracks, not single mover, but we still bake to mover for export
+    bakeTracksToMover(false);
   }
-  $('hex').textContent=lines.join('\n')+`\n… total ${decomp.length} bytes`;
 }
 
-// tracks - lightweight duplicate
-let tracks=[];
-function buildTracksUI(){
+// --- chaining ---
+function buildTracksFromMover(m){
+  tracks=[];
+  if(m.transP>0) tracks.push({id:'t1',type:'t',from:0,to:m.transY||1, dur:m.transP, delay:0, ease:'easeInOut', axis:1});
+  if(m.rotP>0) tracks.push({id:'r1',type:'r',from:0,to:m.rotAng||1.57, dur:m.rotP, delay:0, ease:'linear', axis:m.axis});
+  renderTracks();
+}
+function renderTracks(){
   const cont=$('tracks'); cont.innerHTML='';
   tracks.forEach((tr,i)=>{
-    const d=document.createElement('div'); d.className='track'+(tr.type==='r'?' rot':'');
-    d.innerHTML=`<div style="display:flex;justify-content:space-between"><b>${tr.type==='t'?'T':'R'} #${i}</b><button data-i="${i}" class="del" style="width:auto">✕</button></div>
-    <div class="grid2"><div><label>from</label><input data-k="from" data-i="${i}" value="${tr.from}"></div><div><label>to</label><input data-k="to" data-i="${i}" value="${tr.to}"></div></div>
-    <div class="grid2"><div><label>dur</label><input data-k="dur" data-i="${i}" type="number" value="${tr.dur}"></div><div><label>delay</label><input data-k="delay" data-i="${i}" type="number" value="${tr.delay}"></div></div>
-    <select data-k="easing" data-i="${i}"><option>linear</option><option ${tr.easing==='easeInOut'?'selected':''}>easeInOut</option><option ${tr.easing==='spring'?'selected':''}>spring</option></select>
-    ${tr.type==='r'?`<input data-k="axis" data-i="${i}" value="${tr.axis}" placeholder="axis">`:''}`;
-    cont.appendChild(d);
+    const div=document.createElement('div'); div.className='track'+(tr.type==='r'?' rot':'');
+    div.innerHTML=`<div class="head"><b>${tr.type==='t'?'↕ Float':'🔄 Spin'} #${i+1}</b><div style="display:flex;gap:4px"><button data-i="${i}" data-act="dup" style="width:auto;padding:2px 6px">⎘</button><button data-i="${i}" data-act="del" style="width:auto;padding:2px 6px">✕</button></div></div>
+    <div class="row2"><div><label>from</label><input data-k="from" data-i="${i}" value="${tr.from}" type="number" step="0.1"></div><div><label>to</label><input data-k="to" data-i="${i}" value="${tr.to}" type="number" step="0.1"></div></div>
+    <div class="row2"><div><label>duration ms</label><input data-k="dur" data-i="${i}" type="number" value="${tr.dur}"></div><div><label>delay ms</label><input data-k="delay" data-i="${i}" type="number" value="${tr.delay}"></div></div>
+    <label>easing</label><select data-k="ease" data-i="${i}"><option value="linear" ${tr.ease==='linear'?'selected':''}>linear – constant</option><option value="easeInOut" ${tr.ease==='easeInOut'?'selected':''}>ease in-out – smooth</option><option value="spring" ${tr.ease==='spring'?'selected':''}>spring – bouncy</option></select>
+    ${tr.type==='r'?`<label>axis</label><select data-k="axis" data-i="${i}"><option value="0" ${tr.axis==0?'selected':''}>X</option><option value="1" ${tr.axis==1?'selected':''}>Y</option><option value="2" ${tr.axis==2?'selected':''}>Z</option></select>`:''}`;
+    cont.appendChild(div);
   });
-  cont.querySelectorAll('input,select').forEach(el=>el.addEventListener('change',e=>{ const i=+e.target.dataset.i, k=e.target.dataset.k; let v=e.target.value; if(['dur','delay','from','to','axis'].includes(k)) tracks[i][k]=parseFloat(v)||0; else tracks[i][k]=v; draw(); }));
-  cont.querySelectorAll('.del').forEach(b=>b.addEventListener('click',e=>{ tracks.splice(+e.target.dataset.i,1); buildTracksUI(); draw(); }));
-  draw();
+  cont.querySelectorAll('input,select').forEach(el=>el.addEventListener('change',e=>{ const i=+e.target.dataset.i, k=e.target.dataset.k; let v=e.target.value; if(['from','to','dur','delay','axis'].includes(k)) tracks[i][k]=parseFloat(v)||0; else tracks[i][k]=v; renderTimeline(); bakeTracksToMover(true); }));
+  cont.querySelectorAll('button').forEach(b=>b.addEventListener('click',e=>{ const i=+e.target.dataset.i, a=e.target.dataset.act; if(a==='del'){ tracks.splice(i,1);} else { const c={...tracks[i], id:tracks[i].id+'copy'}; tracks.splice(i+1,0,c);} renderTracks(); renderTimeline(); bakeTracksToMover(true); }));
+  renderTimeline();
 }
-$('addT').addEventListener('click',()=>{ tracks.push({type:'t',from:0,to:2,dur:2000,delay:0,easing:'easeInOut'}); buildTracksUI(); });
-$('addR').addEventListener('click',()=>{ tracks.push({type:'r',from:0,to:6.28,dur:4000,delay:0,easing:'linear',axis:1}); buildTracksUI(); });
-function interp(t,e){ if(e==='linear') return t; if(e==='easeInOut') return 0.5*(1-Math.cos(Math.PI*t)); return 1-Math.cos(t*6.28*1.5)*Math.exp(-3*t); }
-function sample(tr,tm){ const st=tr.delay; const lt=tr.dur?((tm-st)%tr.dur+tr.dur)%tr.dur:0; if(tm<st) return tr.from; return tr.from+(tr.to-tr.from)*interp(lt/tr.dur,tr.easing); }
-function draw(){
-  const cv=$('preview'), ctx=cv.getContext('2d'); ctx.clearRect(0,0,cv.width,cv.height);
-  tracks.filter(t=>t.type==='t').forEach(tr=>{ ctx.beginPath(); ctx.strokeStyle='#7ab2ff'; for(let x=0;x<cv.width;x++){ const v=sample(tr,x/cv.width*4000); const y=cv.height/2 - v*20; if(x===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);} ctx.stroke(); });
-  tracks.filter(t=>t.type==='r').forEach(tr=>{ ctx.beginPath(); ctx.strokeStyle='#7ee787'; for(let x=0;x<cv.width;x++){ const v=sample(tr,x/cv.width*4000); const y=cv.height/2+Math.sin(v)*30; if(x===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);} ctx.stroke(); });
+
+$('addT').addEventListener('click',()=>{ tracks.push({id:'t'+Date.now(),type:'t',from:0,to:1.5,dur:2000,delay:0,ease:'easeInOut'}); renderTracks(); });
+$('addR').addEventListener('click',()=>{ tracks.push({id:'r'+Date.now(),type:'r',from:0,to:3.14,dur:4000,delay:0,ease:'linear',axis:1}); renderTracks(); });
+
+function renderTimeline(){
+  const tl=$('timeline'); if(!tracks.length){ tl.innerHTML='<div class="mini">Add a block on the left – you'll see it here</div>'; return; }
+  tl.innerHTML='';
+  const mode=$('blend').value;
+  let cursor=0;
+  tracks.forEach(tr=>{
+    const div=document.createElement('div');
+    div.className='block '+(tr.type==='t'?'t':'r');
+    const w=Math.max(50, tr.dur/40);
+    div.style.minWidth=w+'px';
+    const start = mode==='sequence' ? cursor : tr.delay;
+    div.innerHTML=`<div>${tr.type==='t'?'↕':'🔄'} ${tr.from}→${tr.to}</div><div style="opacity:.7">${tr.dur}ms</div>`;
+    tl.appendChild(div);
+    if(mode==='sequence') cursor+=tr.dur+tr.delay;
+  });
 }
-$('bake').addEventListener('click',()=>{
-  const t=tracks.filter(x=>x.type==='t'), r=tracks.filter(x=>x.type==='r');
-  const transP=Math.max(0,...t.map(x=>x.dur),0), rotP=Math.max(0,...r.map(x=>x.dur),0);
-  const transY=t.length? Math.max(...t.map(x=>Math.abs(x.to-x.from))):0;
-  const rotA=r.length? r[0].to-r[0].from:0;
-  const axis=r.length? r[0].axis:1;
-  if(selectedIdx>=0){ $('mv_transP').value=Math.round(transP); $('mv_rotP').value=Math.round(rotP); $('mv_transY').value=transY.toFixed(2); $('mv_rotAng').value=rotA.toFixed(2); $('mv_axis').value=axis; $('bakeLog').textContent='baked'; }
+$('blend').addEventListener('change',renderTimeline);
+
+function easeFn(t,e){ if(e==='linear') return t; if(e==='easeInOut') return 0.5*(1-Math.cos(Math.PI*t)); if(e==='spring') return 1-Math.cos(t*Math.PI*2.5)*Math.exp(-3*t); return t; }
+function sampleTrack(tr, time){
+  const start=tr.delay||0;
+  if(time<start) return tr.from;
+  const loop = tr.dur ? ((time-start)%tr.dur) : 0;
+  const p=loop/tr.dur;
+  const ev=easeFn(p,tr.ease);
+  return tr.from + (tr.to-tr.from)*ev;
+}
+function bakeTracksToMover(updateUI=true){
+  if(!tracks.length) return;
+  const tTracks=tracks.filter(t=>t.type==='t'), rTracks=tracks.filter(t=>t.type==='r');
+  const transP=Math.max(0,...tTracks.map(t=>t.dur+t.delay),0)||2000;
+  const rotP=Math.max(0,...rTracks.map(t=>t.dur+t.delay),0)||4000;
+  const transY=tTracks.length? Math.max(...tTracks.map(t=>Math.abs(t.to-t.from))):0;
+  const rotA=rTracks.length? (rTracks[0].to - rTracks[0].from):0;
+  const axis=rTracks.length? rTracks[0].axis:1;
+  if(updateUI){ transP.value=transP; rotP.value=rotP; $('transY').value=transY; $('rotA').value=rotA; axisSel.value=axis; renderSliders(); }
+  // live
+  previewParams = { transY, transP, transEase:'easeInOut', rotA, rotP, rotEase:'linear', axis, type:'both', chained:true, tracks:tracks.slice(), blend:$('blend').value };
+  // bake to decomp for export
+  if(moverOff>=0 && decomp){ const dv=new DataView(decomp.buffer); dv.setInt32(moverOff+4, Math.round(rotP),true); dv.setInt32(moverOff+8, Math.round(transP),true); dv.setFloat32(moverOff+12, transY,true); dv.setInt32(moverOff+16, axis,true); dv.setInt32(moverOff+20, Math.round(rotP),true); dv.setInt32(moverOff+24, Math.round(transP),true); dv.setFloat32(moverOff+29, rotA,true); }
+  $('bakeLog').textContent='baked chain → RotP '+Math.round(rotP)+' TransP '+Math.round(transP);
+}
+
+// --- Three.js preview – true web-animations analog ---
+let previewParams={transY:1.5,transP:2500,rotA:1.57,rotP:4000,axis:1,type:'both',transEase:'easeInOut',rotEase:'linear'};
+let running=true;
+const canvas = document.getElementById('three');
+const renderer = new THREE.WebGLRenderer({canvas, antialias:true, alpha:true});
+renderer.setPixelRatio(window.devicePixelRatio);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(35, 1, 0.1, 100);
+camera.position.set(3.2,2.2,3.2);
+scene.add(new THREE.AmbientLight(0xffffff,0.8));
+const dir = new THREE.DirectionalLight(0xffffff,1.2); dir.position.set(5,8,4); scene.add(dir);
+const grid = new THREE.GridHelper(8,16,0x2a4060,0x1a2d4d); grid.position.y=-1.2; scene.add(grid);
+// item stand-in: balloon-ish group
+const group=new THREE.Group(); scene.add(group);
+const geom=new THREE.IcosahedronGeometry(0.8,1);
+const mat=new THREE.MeshStandardMaterial({color:0x88c8ff, flatShading:true, roughness:0.6});
+const mesh=new THREE.Mesh(geom,mat); mesh.position.y=0.2; group.add(mesh);
+const knot=new THREE.TorusKnotGeometry(0.22,0.07,80,12); const knotM=new THREE.Mesh(knot,new THREE.MeshStandardMaterial({color:0xffd27e})); knotM.position.y=-0.7; mesh.add(knotM);
+
+function resize(){ const r=canvas.parentElement.getBoundingClientRect(); renderer.setSize(r.width,r.height,false); camera.aspect=r.width/r.height; camera.updateProjectionMatrix(); }
+window.addEventListener('resize', resize); resize();
+
+$('play').addEventListener('click',()=>{ running=!running; $('play').textContent=running?'⏸️ Pause':'▶️ Play'; if(running) animate(); });
+$('reset').addEventListener('click',()=>{ camera.position.set(3.2,2.2,3.2); camera.lookAt(0,0,0); });
+
+let t0=performance.now(), last=performance.now(), frames=0;
+function blendedSample(time){
+  if(previewParams.chained && previewParams.tracks){
+    let trans=0, rot=0, axis=previewParams.axis;
+    const mode=previewParams.blend||'parallel';
+    let seqCursor=0;
+    for(const tr of previewParams.tracks){
+      let val;
+      if(mode==='sequence'){
+        const start=seqCursor;
+        const end=start+tr.dur;
+        if(time>=start && time<end){
+          const p=(time-start)/tr.dur;
+          val=tr.from + (tr.to-tr.from)*easeFn(p,tr.ease);
+        }else if(time>=end){ val=tr.to; } else { val=tr.from; }
+        seqCursor=end+ (tr.delay||0);
+      }else{
+        val=sampleTrack(tr, time);
+      }
+      if(tr.type==='t') trans+=val;
+      else { rot+=val; axis=tr.axis; }
+    }
+    return {transY:trans, rot:rot, axis};
+  }else{
+    // single mover style
+    let tp=previewParams.transP||1, rp=previewParams.rotP||1;
+    let tn= tp? ((time%tp)/tp):0;
+    let rn= rp? ((time%rp)/rp):0;
+    if(previewParams.type==='trans' || previewParams.type==='both'){
+      tn = easeFn(tn, previewParams.transEase);
+    }
+    let trans = previewParams.transY * (previewParams.transEase==='linear' ? Math.sin(tn*Math.PI*2) : Math.sin(tn*Math.PI*2)) * 0.5 + previewParams.transY*0.5;
+    // better: ping-pong for easeInOut
+    let rotFactor = easeFn(rn, previewParams.rotEase);
+    let rot = rotFactor * previewParams.rotA;
+    return {transY:trans, rot:rot, axis:previewParams.axis};
+  }
+}
+
+function animate(){
+  if(!running) return;
+  requestAnimationFrame(animate);
+  const now=performance.now();
+  const dt=now-last; last=now;
+  frames++; if(now-t0>1000){ $('fpsPill').textContent=Math.round(frames*1000/(now-t0))+' fps'; frames=0; t0=now; }
+  const elapsed = now*0.001*1000; // ms
+  const s=blendedSample(elapsed);
+  // apply to group
+  group.position.y = (s.transY||0) - (previewParams.transY||0)*0.2;
+  if(s.axis===0) mesh.rotation.x = s.rot||0;
+  else if(s.axis===1) mesh.rotation.y = s.rot||0;
+  else mesh.rotation.z = s.rot||0;
+  mesh.rotation.x += dt*0.00015; // tiny idle
+  renderer.render(scene,camera);
+}
+animate();
+
+// Export – BUUR
+$('export').addEventListener('click',()=>{
+  if(!origBytes||!decomp){ alert('Load a file first'); return; }
+  const hdr=origBytes.slice(0,bodyPtr);
+  const out=new Uint8Array(hdr.length+decomp.length);
+  out.set(hdr,0); out.set(decomp,hdr.length);
+  out[7]=0x55; // 'U'
+  const blob=new Blob([out],{type:'application/octet-stream'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='edited_Item.Gbx'; a.click();
+  $('bakeLog').textContent+=' – exported';
 });
 $('exportBin').addEventListener('click',()=>{ if(!decomp) return; const b=new Blob([decomp]); const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download='body.bin'; a.click(); });
-$('export').addEventListener('click',()=>{
-  if(!origFileBytes||!decomp) return;
-  const hdr=origFileBytes.slice(0,bodyPtr); const out=new Uint8Array(hdr.length+decomp.length); out.set(hdr,0); out.set(decomp,hdr.length); out[7]=0x55;
-  const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([out])); a.download='edited_Item.Gbx'; a.click();
-});
-$('compose').addEventListener('change',draw);
-draw();
+
 </script>
 </body>
 </html>
