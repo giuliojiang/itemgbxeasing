@@ -51,7 +51,7 @@
 <body>
 <header>
   <h1><b>Item Move Studio</b> – make Trackmania items move without code</h1>
-  <div style="display:flex;gap:8px;align-items:center"><span class="pill">✨ web-like chaining</span><a href="https://github.com/giuliojiang/itemgbxeasing" target="_blank" style="color:var(--mut);font-size:12px">GitHub</a></div>
+  <div style="display:flex;gap:8px;align-items:center"><span class="pill">✨ web-like chaining</span><button id="helpBtn" style="width:auto;padding:6px 12px;border-radius:999px;font-size:12px">❓ Help</button><a href="https://github.com/giuliojiang/itemgbxeasing" target="_blank" style="color:var(--mut);font-size:12px">GitHub</a></div>
 </header>
 <div class="app">
   <div class="left">
@@ -445,5 +445,31 @@ $('export').addEventListener('click',()=>{
 $('exportBin').addEventListener('click',()=>{ if(!decomp) return; const b=new Blob([decomp]); const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download='body.bin'; a.click(); });
 
 </script>
+
+<div id="helpModal" style="display:none;position:fixed;inset:0;z-index:99;background:rgba(0,0,0,.55);backdrop-filter:blur(6px);align-items:center;justify-content:center;padding:20px">
+  <div style="max-width:720px;width:100%;background:#101827;border:1px solid #24405f;border-radius:16px;padding:18px;max-height:90vh;overflow:auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><h3 style="margin:0">How to use Item Move Studio</h3><button id="closeHelp" style="width:auto">✕</button></div>
+    <ol style="line-height:1.6;font-size:13px;color:#c8d6ea">
+      <li><b>Drop your .Item.Gbx</b> – big box top-left. Everything stays in your browser, no upload.</li>
+      <li><b>Pick a Quick Start</b> – ☁️ Gentle float, 🌀 Spin, 🛸 Orbit+float, 🔔 Pendulum. One click sets sensible numbers.</li>
+      <li><b>Tweak with sliders</b> – ↕️ Float height, ⏱️ Float period (fast→slow), 🔄 Spin amount (shows ° too), Axis Y=carousel X=tumble Z=roll. Preview on the right moves live.</li>
+      <li><b>Chain like web animations</b> – Add Float / Spin blocks. Each is a keyframe <code>from → to</code> with duration & easing (linear=constant, ease in-out=smooth, spring=bouncy). Blend: <code>Parallel</code> = both at once (like <code>Promise.all</code>), <code>Sequence</code> = one after another.</li>
+      <li><b>Watch the 3D</b> – The balloon simulates your exact GBX mover (RotPeriod, TransPeriod, TransY...). Pause / Reset view top-right. FPS shows smoothness.</li>
+      <li><b>Save</b> – Blue button saves BUUR uncompressed .Item.Gbx – Trackmania loads it. Keep original as backup.</li>
+    </ol>
+    <div style="font-size:12px;color:#8ea2bd;background:#0b1422;border:1px dashed #2a4a70;border-radius:10px;padding:10px;margin-top:10px">
+      <b>Tip:</b> Your item has a hidden <code>CPlugAnimLocSimple</code> with 9 numbers. We make it friendly. Chaining is baked to that single loop for the game, but you see the chain blended in preview.
+      <br><br><b>Easing =</b> same as CSS <code>animation-timing-function</code>. The timeline bars below the 3D view stretch by duration so you see the chain.
+    </div>
+    <div style="display:flex;gap:8px;margin-top:12px"><button id="closeHelp2" class="primary" style="flex:1">Got it, let's move things!</button></div>
+  </div>
+</div>
+<script>
+document.getElementById('helpBtn')?.addEventListener('click',()=>{ document.getElementById('helpModal').style.display='flex'; });
+document.getElementById('closeHelp')?.addEventListener('click',()=>{ document.getElementById('helpModal').style.display='none'; });
+document.getElementById('closeHelp2')?.addEventListener('click',()=>{ document.getElementById('helpModal').style.display='none'; });
+document.getElementById('helpModal')?.addEventListener('click',(e)=>{ if(e.target.id==='helpModal') e.currentTarget.style.display='none'; });
+</script>
+
 </body>
 </html>
