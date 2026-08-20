@@ -342,17 +342,17 @@ function sampleTrack(tr, time){
 function bakeTracksToMover(updateUI=true){
   if(!tracks.length) return;
   const tTracks=tracks.filter(t=>t.type==='t'), rTracks=tracks.filter(t=>t.type==='r');
-  const transP=Math.max(0,...tTracks.map(t=>t.dur+t.delay),0)||2000;
-  const rotP=Math.max(0,...rTracks.map(t=>t.dur+t.delay),0)||4000;
-  const transY=tTracks.length? Math.max(...tTracks.map(t=>Math.abs(t.to-t.from))):0;
-  const rotA=rTracks.length? (rTracks[0].to - rTracks[0].from):0;
+  const tP=Math.max(0,...tTracks.map(t=>t.dur+t.delay),0)||2000;
+  const rP=Math.max(0,...rTracks.map(t=>t.dur+t.delay),0)||4000;
+  const tY=tTracks.length? Math.max(...tTracks.map(t=>Math.abs(t.to-t.from))):0;
+  const rA=rTracks.length? (rTracks[0].to - rTracks[0].from):0;
   const axis=rTracks.length? rTracks[0].axis:1;
-  if(updateUI){ transP.value=transP; rotP.value=rotP; $('transY').value=transY; $('rotA').value=rotA; axisSel.value=axis; renderSliders(); }
+  if(updateUI){ transP.value=tP; rotP.value=rP; $('transY').value=tY; $('rotA').value=rA; axisSel.value=axis; renderSliders(); }
   // live
-  previewParams = { transY, transP, transEase:'easeInOut', rotA, rotP, rotEase:'linear', axis, type:'both', chained:true, tracks:tracks.slice(), blend:$('blend').value };
+  previewParams = { transY:tY, transP:tP, transEase:'easeInOut', rotA:rA, rotP:rP, rotEase:'linear', axis, type:'both', chained:true, tracks:tracks.slice(), blend:$('blend').value };
   // bake to decomp for export
-  if(moverOff>=0 && decomp){ const dv=new DataView(decomp.buffer); dv.setInt32(moverOff+4, Math.round(rotP),true); dv.setInt32(moverOff+8, Math.round(transP),true); dv.setFloat32(moverOff+12, transY,true); dv.setInt32(moverOff+16, axis,true); dv.setInt32(moverOff+20, Math.round(rotP),true); dv.setInt32(moverOff+24, Math.round(transP),true); dv.setFloat32(moverOff+29, rotA,true); }
-  $('bakeLog').textContent='baked chain → RotP '+Math.round(rotP)+' TransP '+Math.round(transP);
+  if(moverOff>=0 && decomp){ const dv=new DataView(decomp.buffer); dv.setInt32(moverOff+4, Math.round(rP),true); dv.setInt32(moverOff+8, Math.round(tP),true); dv.setFloat32(moverOff+12, tY,true); dv.setInt32(moverOff+16, axis,true); dv.setInt32(moverOff+20, Math.round(rP),true); dv.setInt32(moverOff+24, Math.round(tP),true); dv.setFloat32(moverOff+29, rA,true); }
+  $('bakeLog').textContent='baked chain → RotP '+Math.round(rP)+' TransP '+Math.round(tP);
 }
 
 // --- Three.js preview – true web-animations analog ---
