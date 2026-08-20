@@ -313,7 +313,7 @@ $('addT').addEventListener('click',()=>{ tracks.push({id:'t'+Date.now(),type:'t'
 $('addR').addEventListener('click',()=>{ tracks.push({id:'r'+Date.now(),type:'r',from:0,to:3.14,dur:4000,delay:0,ease:'linear',axis:1}); renderTracks(); });
 
 function renderTimeline(){
-  const tl=$('timeline'); if(!tracks.length){ tl.innerHTML='<div class="mini">Add a block on the left – you'll see it here</div>'; return; }
+  const tl=$('timeline'); if(!tracks.length){ tl.innerHTML="<div class=\"mini\">Add a block on the left – you\'ll see it here</div>"; return; }
   tl.innerHTML='';
   const mode=$('blend').value;
   let cursor=0;
