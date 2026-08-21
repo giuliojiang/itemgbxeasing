@@ -1,4 +1,4 @@
-// gbx.js — parse GBX Item, find mover, patch, build BUUR
+// gbx.js — parse GBX Item, find mover, patch, build BUUR (handles both BUCR and BUUR)
 export function readU32(b,o){ return (b[o]|b[o+1]<<8|b[o+2]<<16|b[o+3]<<24)>>>0; }
 export function parseGBX(u8){
   if(String.fromCharCode(...u8.slice(0,3))!=='GBX') throw new Error('Not GBX');
@@ -9,7 +9,12 @@ export function parseGBX(u8){
   const comp=readU32(u8,bPtr+4);
   const cStart=bPtr+8, cEnd=cStart+comp;
   const classId=readU32(u8,9);
-  return { hdrEnd, bPtr, uncomp, comp, cStart, cEnd, userSize, classId, origBytes:u8 };
+  const fmt = String.fromCharCode(u8[7]||0); // 'B' for BUCR, 'U' for BUUR (byte 7 is format char in "BUCR"/"BUUR")
+  // Actually byte 7 is second char of "BUCR": B U C R, so byte 7 is 'U' for both? No, byte 4-7 is "GBX" + version, byte 7 is 'B' or 'U'?
+  // For BUCR, bytes 4-7 are 06 00 42 55 43 52? Wait spec: 0-2 "GBX", 3 version, 4-7 "BUCR" or "BUUR"
+  // Safer: detect by checking if byte 7 is 'U' (0x55) vs 'C' (0x43) for compressed
+  const isBUUR = (u8[7]===0x55) || (comp===uncomp && cEnd<=u8.length && cEnd-cStart===uncomp);
+  return { hdrEnd, bPtr, uncomp, comp, cStart, cEnd, userSize, classId, origBytes:u8, isBUUR, fmtChar: String.fromCharCode(u8[7]) };
 }
 
 function scoreCandidate(c, bufLen){
@@ -49,7 +54,6 @@ export function findMover(buf){
     const ra=dv.getFloat32(off+29,true);
     if(!Number.isFinite(ra)) continue;
     if(Math.abs(ra)>1000) continue;
-    // plausible filters for real mover
     if(transP>0){
       if(Math.abs(transY)<0.02 || Math.abs(transY)>30) continue;
     }
@@ -65,8 +69,7 @@ export function findMover(buf){
     const best=cands.find(c=>c.off>400) || cands[0];
     return best;
   }
-  // Fallback: no mover found via strict scan – return synthetic default so IR still works.
-  // We try a second looser pass that allows tiny transY/ra to at least get an offset for patching.
+  // Fallback: looser pass
   for(let off=0; off<buf.length-33; off++){
     const ver=dv.getInt32(off,true);
     if(ver<0||ver>3) continue;
@@ -80,17 +83,13 @@ export function findMover(buf){
     const rf=buf[off+28];
     const ra=dv.getFloat32(off+29,true);
     if(!Number.isFinite(transY)||!Number.isFinite(ra)) continue;
-    // Even if transY tiny, accept as fallback
     return {off,ver,rotP,transP,transY: Math.abs(transY)>0.01?transY:1.5, axis, rotMax: rotMax||rotP, transMax: transMax||transP, rotFunc: rf<=3?rf:0, rotAng: Math.abs(ra)>0.01?ra:1.57, score:0, fallback:true};
   }
-  // Ultimate fallback: no offset at all – use synthetic offset at 0 (will be patched at end for BUUR creation)
   throw new Error('No mover found – static item or unknown layout. Using default IR.');
 }
 
 export function patchMover(decomp, off, mover){
-  // If off is out of range (fallback case), try to append at end if possible
   if(off<0 || off+33> decomp.length){
-    // cannot patch, return false
     return false;
   }
   const dv=new DataView(decomp.buffer, decomp.byteOffset, decomp.byteLength);
@@ -114,6 +113,17 @@ export function buildBUUR(origBytes, bodyPtr, decomp){
   dv.setUint32(bodyPtr, decomp.length, true);
   dv.setUint32(bodyPtr+4, decomp.length, true);
   out.set(decomp, bodyPtr+8);
-  if(out.length>7) out[7]=0x55;
+  if(out.length>7) out[7]=0x55; // 'U' -> BUUR
   return out;
+}
+
+// Helper to get decomp from either BUCR (needs lzo) or BUUR (raw)
+export function getDecompBytes(origBytes, parsed, decompressFn){
+  if(parsed.isBUUR){
+    // body is uncompressed already
+    return origBytes.slice(parsed.bPtr+8, parsed.bPtr+8+parsed.uncomp);
+  }else{
+    const comp=origBytes.slice(parsed.cStart, parsed.cEnd);
+    return decompressFn(comp, parsed.uncomp);
+  }
 }
