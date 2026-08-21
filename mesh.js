@@ -1,6 +1,7 @@
 /**
  * mesh.js – Robust Crystal mesh extractor for Item.Gbx (old format)
- * v4 – edge->tris for Balloons (2856 verts 2695 tris), ib search for others
+ * v4.1 – edge->tris for Balloons (2856 verts 2695 tris), ib search for others
+ * Returns {geometries, reason} to match app.js
  */
 
 export function findMesh(decomp) {
@@ -87,7 +88,7 @@ export function findMesh(decomp) {
     return { positions, indices, vertCount: cnt, triCount: tris.length, offset: off, size, method: `crystal-edges`, faceCount: faceCnt, edgeCount: edgeCnt, posOffset: posOff };
   }
 
-  // 2. Try point cloud + ib search (for Santa etc.)
+  // 2. point cloud + ib search
   let candidates = [];
   for (let off = 0; off < len - 12; off += 4) {
     if (off + 12 > len) break;
@@ -109,18 +110,16 @@ export function findMesh(decomp) {
     if (cnt < 80) continue;
     const size = Math.max(maxx - minx, maxy - miny, maxz - minz);
     if (size < 0.15 || size > 12) continue;
-    candidates.push({ offset: off, vertCount: cnt, size, posOffset: off, minx, miny, minz, maxx, maxy, maxz });
+    candidates.push({ offset: off, vertCount: cnt, size, posOffset: off });
     if (candidates.length >= 8) break;
   }
 
-  // For each candidate, try ib
   for (const cand of candidates) {
     const cnt = cand.vertCount;
     const posOff = cand.posOffset;
     const searchStart = posOff + cnt * 12;
     const searchEnd = Math.min(len - 6, searchStart + 250000);
     for (let s = searchStart; s < searchEnd; s += 2) {
-      // u16 count prefix
       if (s + 2 + 60 > len) continue;
       const icnt = dv.getUint16(s, true);
       if (icnt < 60 || icnt > cnt * 4 || icnt % 3 !== 0) continue;
@@ -128,7 +127,6 @@ export function findMesh(decomp) {
       let ok = true;
       for (let i = 0; i < Math.min(30, icnt); i++) { const idx = dv.getUint16(s + 2 + i * 2, true); if (idx >= cnt) { ok = false; break; } }
       if (!ok) continue;
-      // area check first tri
       const ia = dv.getUint16(s + 2, true), ib = dv.getUint16(s + 4, true), ic = dv.getUint16(s + 6, true);
       if (ia >= cnt || ib >= cnt || ic >= cnt) continue;
       const ax = dv.getFloat32(posOff + ia * 12, true), ay = dv.getFloat32(posOff + ia * 12 + 4, true), az = dv.getFloat32(posOff + ia * 12 + 8, true);
@@ -139,7 +137,6 @@ export function findMesh(decomp) {
       const crx = aby * acz - abz * acy, cry = abz * acx - abx * acz, crz = abx * acy - aby * acx;
       const area = Math.sqrt(crx * crx + cry * cry + crz * crz) * 0.5;
       if (area < 1e-6 || area > 10) continue;
-      // found ib!
       const positions = new Float32Array(cnt * 3);
       for (let i = 0; i < cnt; i++) { positions[i * 3] = dv.getFloat32(posOff + i * 12, true); positions[i * 3 + 1] = dv.getFloat32(posOff + i * 12 + 4, true); positions[i * 3 + 2] = dv.getFloat32(posOff + i * 12 + 8, true); }
       const indices = new Uint32Array(icnt);
@@ -147,7 +144,6 @@ export function findMesh(decomp) {
       console.log(`Mesh via ib: cnt ${cnt} @${cand.offset} sz ${cand.size.toFixed(2)} ib ${icnt} @${s} tris ${icnt/3}`);
       return { positions, indices, vertCount: cnt, triCount: icnt / 3, offset: cand.offset, size: cand.size, method: `heuristic-ib-u16`, posOffset: posOff, ibOffset: s + 2 };
     }
-    // u32 ib
     for (let s = searchStart; s < searchEnd; s += 4) {
       if (s + 4 + 60 > len) continue;
       const icnt = dv.getInt32(s, true);
@@ -169,12 +165,10 @@ export function findMesh(decomp) {
       for (let i = 0; i < cnt; i++) { positions[i * 3] = dv.getFloat32(posOff + i * 12, true); positions[i * 3 + 1] = dv.getFloat32(posOff + i * 12 + 4, true); positions[i * 3 + 2] = dv.getFloat32(posOff + i * 12 + 8, true); }
       const indices = new Uint32Array(icnt);
       for (let i = 0; i < icnt; i++) indices[i] = dv.getInt32(s + 4 + i * 4, true);
-      console.log(`Mesh via ib u32: cnt ${cnt} @${cand.offset} ib ${icnt} @${s}`);
       return { positions, indices, vertCount: cnt, triCount: icnt / 3, offset: cand.offset, size: cand.size, method: `heuristic-ib-u32`, posOffset: posOff };
     }
   }
 
-  // Fallback to largest point cloud
   if (candidates.length) {
     let best = candidates[0];
     for (const c of candidates) if (c.vertCount > best.vertCount) best = c;
@@ -192,15 +186,20 @@ export function findMesh(decomp) {
 }
 
 export function parseMesh(decomp){
-  const res=findMesh(decomp);
-  if(!res) return [];
-  return [res];
+  const single=findMesh(decomp);
+  if(!single) return { geometries: [], reason: `no valid mesh after scan` };
+  const reason = single.method.startsWith('crystal')
+    ? `Crystal mesh: cnt ${single.vertCount} @${single.offset} sz ${single.size.toFixed(2)} edge ${single.edgeCount} face ${single.faceCount} tris ${single.triCount}`
+    : single.indices
+      ? `verts ${single.vertCount} @${single.offset} size ${single.size.toFixed(2)}m, ib ${single.triCount*3} tris ${single.triCount} ${single.method}`
+      : `verts ${single.vertCount} @${single.offset} size ${single.size.toFixed(2)}m, no ib (points) ${single.method}`;
+  return { geometries: [single], reason };
 }
 
 export function createThreeGeometry(THREE, desc){
   const geom=new THREE.BufferGeometry();
   geom.setAttribute('position', new THREE.BufferAttribute(desc.positions, 3));
-  if(desc.indices){
+  if(desc.indices && desc.indices.length>=30){
     geom.setIndex(new THREE.BufferAttribute(desc.indices, 1));
     geom.computeVertexNormals();
   }
