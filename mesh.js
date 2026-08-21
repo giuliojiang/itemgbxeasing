@@ -43,24 +43,21 @@ export function findMesh(decomp) {
     const cnt=cand.vertCount, posOff=cand.posOffset, stride=cand.stride;
     const after=posOff+cnt*stride;
     if(cnt<1000) continue;
-    // Look for IndexBuffer marker 0x09057001 (new) and 0x09057000 (old)
+    console.log(`  cand ${cnt}@${cand.offset} s${stride} v0 ${getPos(posOff,stride,0).map(x=>x.toFixed(3)).join(',')} v1 ${getPos(posOff,stride,1).map(x=>x.toFixed(3)).join(',')} v2 ${getPos(posOff,stride,2).map(x=>x.toFixed(3)).join(',')}`);
+    if(stride===24){
+      console.log(`   also pos@+12 v0 ${[dv.getFloat32(posOff+12,true),dv.getFloat32(posOff+16,true),dv.getFloat32(posOff+20,true)].map(x=>x.toFixed(3)).join(',')}`);
+    }
     for(let s=after; s<Math.min(len-16, after+600); s++){
       const v=dv.getInt32(s,true);
       if(v===0x09057001 || v===0x09057000){
         const isNew = (v===0x09057001);
-        console.log(`  found IndexBuffer marker 0x${v.toString(16)} @${s} delta ${s-after} new=${isNew}`);
         let p=s+4;
         if(p+8>len) continue;
         const flags=dv.getInt32(p,true);
         const count=dv.getInt32(p+4,true);
-        console.log(`    flags ${flags} count ${count} @${p} (cnt ${cnt})`);
-        if(count<60 || count>cnt*6 || count%3!==0) {
-          console.log(`    count reject`);
-          continue;
-        }
+        if(count<60 || count>cnt*6 || count%3!==0) continue;
         if(isNew){
-          // delta-encoded int16
-          if(p+8+count*2>len){ console.log(`    not enough data for delta`); continue; }
+          if(p+8+count*2>len) continue;
           let cur=0;
           const indices=new Uint32Array(count);
           let maxI=0, ok=true;
@@ -71,24 +68,34 @@ export function findMesh(decomp) {
             indices[i]=cur;
             if(cur>maxI) maxI=cur;
           }
-          if(!ok){ console.log(`    delta decode out of range`); continue; }
-          const a=indices[0], b=indices[1], c=indices[2];
-          const ar=triArea(posOff,stride,a,b,c);
-          console.log(`    delta ib first ${a},${b},${c} area ${ar} max ${maxI}`);
-          if(ar<1e-5||ar>10){ console.log(`    area reject`); continue; }
+          if(!ok){ console.log(`    delta out of range @${s} cur ${cur}`); continue; }
+          let valid=0, total=0;
+          for(let i=0;i<Math.min(count-2, 30); i+=3){
+            const a=indices[i], b=indices[i+1], c=indices[i+2];
+            if(a===b||b===c||a===c) continue;
+            const ar=triArea(posOff,stride,a,b,c);
+            total++;
+            if(ar>1e-6 && ar<20) valid++;
+          }
+          console.log(`    delta ib cnt ${count} max ${maxI} validTris ${valid}/${total} first ${indices[0]},${indices[1]},${indices[2]} area ${triArea(posOff,stride,indices[0],indices[1],indices[2])} | ${indices[3]},${indices[4]},${indices[5]} | ${indices[6]},${indices[7]},${indices[8]}`);
+          if(valid===0){ console.log(`    area reject all degenerate`); continue; }
           const pos=new Float32Array(cnt*3);
           for(let i=0;i<cnt;i++){ const pp=getPos(posOff,stride,i); pos[i*3]=pp[0]; pos[i*3+1]=pp[1]; pos[i*3+2]=pp[2]; }
-          console.log(`Raw ib delta: cnt ${cnt} @${cand.offset} stride ${stride} ib ${count} tris ${count/3} max ${maxI}`);
+          console.log(`Raw ib delta: cnt ${cnt} @${cand.offset} stride ${stride} ib ${count} tris ${count/3} max ${maxI} valid ${valid}`);
           return {positions:pos,indices:indices,vertCount:cnt,triCount:count/3,offset:cand.offset,size:cand.size,method:`raw-ib-delta-new`,posOffset:posOff,stride};
         } else {
-          // old direct u16
           if(p+8+count*2>len) continue;
           let ok=true, maxI=0;
           for(let i=0;i<count;i++){ const idx=dv.getUint16(p+8+i*2,true); if(idx>=cnt){ ok=false; break; } if(idx>maxI) maxI=idx; }
           if(!ok) continue;
-          const a=dv.getUint16(p+8,true), b=dv.getUint16(p+10,true), c=dv.getUint16(p+12,true);
-          const ar=triArea(posOff,stride,a,b,c);
-          if(ar<1e-5||ar>10) continue;
+          let valid=0;
+          for(let i=0;i<Math.min(count-2,30); i+=3){
+            const a=dv.getUint16(p+8+i*2,true), b=dv.getUint16(p+8+(i+1)*2,true), c=dv.getUint16(p+8+(i+2)*2,true);
+            if(a===b||b===c||a===c) continue;
+            const ar=triArea(posOff,stride,a,b,c);
+            if(ar>1e-6&&ar<20) valid++;
+          }
+          if(valid===0) continue;
           const pos=new Float32Array(cnt*3);
           for(let i=0;i<cnt;i++){ const pp=getPos(posOff,stride,i); pos[i*3]=pp[0]; pos[i*3+1]=pp[1]; pos[i*3+2]=pp[2]; }
           const idx=new Uint32Array(count);
@@ -98,31 +105,7 @@ export function findMesh(decomp) {
         }
       }
     }
-    // Also try VisualIndexed direct (0x0906A000 old) – direct u16 without IndexBuffer wrapper
-    for(let s=after; s<Math.min(len-16, after+600); s++){
-      const v=dv.getInt32(s,true);
-      if(v===0x0906A000){
-        let p=s+4;
-        if(p+4>len) continue;
-        const count=dv.getInt32(p,true);
-        if(count<60||count>cnt*6||count%3!==0) continue;
-        if(p+4+count*2>len) continue;
-        let ok=true, maxI=0;
-        for(let i=0;i<count;i++){ const idx=dv.getUint16(p+4+i*2,true); if(idx>=cnt){ ok=false; break; } if(idx>maxI) maxI=idx; }
-        if(!ok) continue;
-        const a=dv.getUint16(p+4,true), b=dv.getUint16(p+6,true), c=dv.getUint16(p+8,true);
-        const ar=triArea(posOff,stride,a,b,c);
-        if(ar<1e-5||ar>10) continue;
-        const pos=new Float32Array(cnt*3);
-        for(let i=0;i<cnt;i++){ const pp=getPos(posOff,stride,i); pos[i*3]=pp[0]; pos[i*3+1]=pp[1]; pos[i*3+2]=pp[2]; }
-        const idx=new Uint32Array(count);
-        for(let i=0;i<count;i++) idx[i]=dv.getUint16(p+4+i*2,true);
-        console.log(`Raw ib VisualIndexed old: cnt ${cnt} @${cand.offset} ib ${count} tris ${count/3}`);
-        return {positions:pos,indices:idx,vertCount:cnt,triCount:count/3,offset:cand.offset,size:cand.size,method:`visual-indexed-old`,posOffset:posOff,stride};
-      }
-    }
   }
-
   if(candidates.length){
     let best=candidates[0];
     for(const c of candidates) if(c.vertCount>best.vertCount) best=c;
