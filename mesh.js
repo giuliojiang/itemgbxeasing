@@ -140,7 +140,7 @@ export function findMesh(decomp) {
     if(maxI<50) continue;
     // Now look backwards up to 100k for a vertex buffer that could host maxI
     const backStart=Math.max(0,s-100000);
-    for(let off=backStart; off<s-12; off+=4){
+    for(let off=s-32; off>=backStart; off-=4){
       for(let stride of [12,24,32]){
         const need = (maxI+1)*stride;
         if(off+need > s) continue;
