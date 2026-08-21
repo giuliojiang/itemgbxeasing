@@ -81,6 +81,51 @@ export function findMesh(decomp){
     if(candidates.length>=24) break;
   }
   candidates.sort((a,b)=>b.vertCount-a.vertCount);
+
+  // Direct offset fallback for files like MovingDuck where float-run missed (e.g. ib 100737 max 2500 off 70725)
+  if(true){
+    const gaps=[0,4,8,12,16,24,32,48,64,84,96,128,256,512,1024,2048,4096,8192];
+    for(let ss=0;ss<len-16;ss++){
+      const vv=dv.getInt32(ss,true);
+      if(vv!==0x09057001&&vv!==0x09057000) continue;
+      const isNew2=(vv===0x09057001);
+      let pp=ss+4; if(pp+8>len) continue;
+      const cc=dv.getInt32(pp+4,true);
+      if(cc<30||cc>30000||cc%3!==0) continue;
+      if(pp+8+cc*2>len) continue;
+      let cur2=0,maxI2=0,ok2=true;
+      const idx2=new Uint32Array(cc);
+      if(isNew2){ for(let i=0;i<cc;i++){const d=dv.getInt16(pp+8+i*2,true); cur2+=d; if(cur2<0||cur2>30000){ok2=false;break;} idx2[i]=cur2; if(cur2>maxI2) maxI2=cur2; } } else { for(let i=0;i<cc;i++){const id=dv.getUint16(pp+8+i*2,true); if(id>30000){ok2=false;break;} idx2[i]=id; if(id>maxI2) maxI2=id; } }
+      if(!ok2||maxI2<50) continue;
+      for(let gap of gaps){
+        const vc=maxI2+1;
+        const off=ss - vc*12 - gap;
+        if(off<0||off+vc*12>len) continue;
+        const x0=dv.getFloat32(off,true), y0=dv.getFloat32(off+4,true), z0=dv.getFloat32(off+8,true);
+        const x1=dv.getFloat32(off+(vc-1)*12,true), y1=dv.getFloat32(off+(vc-1)*12+4,true), z1=dv.getFloat32(off+(vc-1)*12+8,true);
+        if(!Number.isFinite(x0)||!Number.isFinite(y0)||!Number.isFinite(z0)||!Number.isFinite(x1)||!Number.isFinite(y1)||!Number.isFinite(z1)) continue;
+        if(Math.abs(x0)>200||Math.abs(y0)>200||Math.abs(z0)>200||Math.abs(x1)>200||Math.abs(y1)>200||Math.abs(z1)>200) continue;
+        let ok=true, minx=x0,miny=y0,minz=z0,maxx=x0,maxy=y0,maxz=z0;
+        for(let i=0;i<vc;i+=Math.max(1,Math.floor(vc/40))){
+          const xx=dv.getFloat32(off+i*12,true), yy=dv.getFloat32(off+i*12+4,true), zz=dv.getFloat32(off+i*12+8,true);
+          if(!Number.isFinite(xx)||!Number.isFinite(yy)||!Number.isFinite(zz)){ok=false;break;}
+          if(Math.abs(xx)>200||Math.abs(yy)>200||Math.abs(zz)>200){ok=false;break;}
+          if(xx<minx)minx=xx; if(yy<miny)miny=yy; if(zz<minz)minz=zz;
+          if(xx>maxx)maxx=xx; if(yy>maxy)maxy=yy; if(zz>maxz)maxz=zz;
+        }
+        if(!ok) continue;
+        const size=Math.max(maxx-minx,maxy-miny,maxz-minz);
+        if(size<0.1||size>50) continue;
+        let valid=0;
+        for(let i=0;i<Math.min(cc-2,60);i+=3){const a=idx2[i],b=idx2[i+1],c=idx2[i+2]; if(a>=vc||b>=vc||c>=vc) continue; if(a===b||b===c||a===c) continue; const ar=triAreaOff(off,0,12,a,b,c); if(ar>1e-7&&ar<50) valid++;}
+        if(valid<4) continue;
+        const positions=new Float32Array(vc*3);
+        for(let i=0;i<vc;i++){positions[i*3]=dv.getFloat32(off+i*12,true); positions[i*3+1]=dv.getFloat32(off+i*12+4,true); positions[i*3+2]=dv.getFloat32(off+i*12+8,true);}
+        console.log(`Solid2Model direct: ib @${ss} cnt ${cc} max ${maxI2} with verts ${vc} @${off} sz ${size.toFixed(2)} valid ${valid} gap ${gap}`);
+        return {positions,indices:idx2,vertCount:vc,triCount:cc/3,offset:off,size,method:`solid2model-direct`,posOffset:off,stride:12,ibOffset:ss};
+      }
+    }
+  }
   if(candidates.length===0){
     // fallback looser for large files like MovingDuck 908k
     for(let off=0;off<len-12;off+=4){
