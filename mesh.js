@@ -3,233 +3,140 @@ export function findMesh(decomp) {
   const len = decomp.length;
   console.log(`findMesh len ${len}`);
 
-  function tryFaces(posOff, cnt, stride, faceOff, log) {
-    if (faceOff + 4 > len) return null;
-    const fc = dv.getInt32(faceOff, true);
-    if (fc < 10 || fc > 10000) {
-      if (log) console.log(`  faces @${faceOff} fc ${fc} reject`);
-      return null;
-    }
-    if (log) console.log(`  trying faces @${faceOff} fc ${fc}`);
-    let p = faceOff + 4;
-    for (let isNew of [false, true]) {
-      let pp = p, ok = true, tris = [];
-      for (let f = 0; f < Math.min(fc, 20); f++) {
-        if (pp + (isNew ? 1 : 4) > len) { ok = false; break; }
-        let vc = isNew ? dv.getUint8(pp) + 3 : dv.getInt32(pp, true);
-        if (vc < 3 || vc > 12) { ok = false; break; }
-        pp += isNew ? 1 : 4;
-        if (pp + vc * (isNew ? 2 : 4) > len) { ok = false; break; }
-        for (let i = 0; i < vc; i++) {
-          let idx = isNew ? dv.getUint16(pp, true) : dv.getInt32(pp, true);
-          pp += isNew ? 2 : 4;
-          if (idx < 0 || idx >= cnt) { ok = false; break; }
-        }
-        if (!ok) break;
-        if (pp + vc * 8 + 8 > len) { ok = false; break; }
-        pp += vc * 8 + 8;
-        for (let i = 1; i < vc - 1; i++) tris.push(1);
-      }
-      if (ok && tris.length >= 10) {
-        if (log) console.log(`    faces ${isNew?'new':'old'} first 20 ok tris~${tris.length}`);
-        let full = [...tris];
-        for (let f = 20; f < fc; f++) {
-          if (pp + (isNew ? 1 : 4) > len) break;
-          let vc = isNew ? dv.getUint8(pp) + 3 : dv.getInt32(pp, true);
-          if (vc < 3 || vc > 12) break;
-          pp += isNew ? 1 : 4;
-          if (pp + vc * (isNew ? 2 : 4) > len) break;
-          let ok2 = true;
-          for (let i = 0; i < vc; i++) {
-            let idx = isNew ? dv.getUint16(pp, true) : dv.getInt32(pp, true);
-            pp += isNew ? 2 : 4;
-            if (idx < 0 || idx >= cnt) { ok2 = false; break; }
-          }
-          if (!ok2) break;
-          if (pp + vc * 8 + 8 > len) break;
-          pp += vc * 8 + 8;
-          for (let i = 1; i < vc - 1; i++) full.push(1);
-        }
-        if (full.length >= 20) {
-          // Rebuild real tris for return
-          pp = p;
-          let realTris = [];
-          for (let f = 0; f < fc; f++) {
-            if (pp + (isNew ? 1 : 4) > len) break;
-            let vc = isNew ? dv.getUint8(pp) + 3 : dv.getInt32(pp, true);
-            if (vc < 3 || vc > 12) break;
-            pp += isNew ? 1 : 4;
-            if (pp + vc * (isNew ? 2 : 4) > len) break;
-            let inds = [];
-            for (let i = 0; i < vc; i++) {
-              let idx = isNew ? dv.getUint16(pp, true) : dv.getInt32(pp, true);
-              pp += isNew ? 2 : 4;
-              inds.push(idx);
-            }
-            if (pp + vc * 8 + 8 > len) break;
-            pp += vc * 8 + 8;
-            for (let i = 1; i < vc - 1; i++) realTris.push([inds[0], inds[i], inds[i + 1]]);
-          }
-          return { tris: realTris, fc, mode: isNew ? 'new' : 'old' };
-        }
-      }
-    }
-    if (log) console.log(`  faces @${faceOff} no mode worked`);
-    return null;
-  }
-
   function getPos(off, stride, i) {
     return [dv.getFloat32(off + i * stride, true), dv.getFloat32(off + i * stride + 4, true), dv.getFloat32(off + i * stride + 8, true)];
+  }
+  function triArea(posOff, stride, a, b, c) {
+    const pa = getPos(posOff, stride, a), pb = getPos(posOff, stride, b), pc = getPos(posOff, stride, c);
+    const abx = pb[0]-pa[0], aby = pb[1]-pa[1], abz = pb[2]-pa[2];
+    const acx = pc[0]-pa[0], acy = pc[1]-pa[1], acz = pc[2]-pa[2];
+    const crx = aby*acz - abz*acy, cry = abz*acx - abx*acz, crz = abx*acy - aby*acx;
+    return Math.sqrt(crx*crx+cry*cry+crz*crz)*0.5;
   }
 
   let candidates = [];
   for (let off = 0; off < len - 12; off += 4) {
-    for (let stride of [12, 24, 32, 36]) {
-      if (off + stride > len) continue;
-      const x0 = dv.getFloat32(off, true), y0 = dv.getFloat32(off + 4, true), z0 = dv.getFloat32(off + 8, true);
-      if (!Number.isFinite(x0) || !Number.isFinite(y0) || !Number.isFinite(z0)) continue;
-      if (Math.abs(x0) > 50 || Math.abs(y0) > 50 || Math.abs(z0) > 50) continue;
-      let minx = x0, miny = y0, minz = z0, maxx = x0, maxy = y0, maxz = z0;
-      let cnt = 1, o = off + stride;
-      while (o + 12 <= len && cnt < 8000) {
-        const xx = dv.getFloat32(o, true), yy = dv.getFloat32(o + 4, true), zz = dv.getFloat32(o + 8, true);
-        if (!Number.isFinite(xx) || !Number.isFinite(yy) || !Number.isFinite(zz)) break;
-        if (Math.abs(xx) > 50 || Math.abs(yy) > 50 || Math.abs(zz) > 50) break;
-        if (xx < minx) minx = xx; if (yy < miny) miny = yy; if (zz < minz) minz = zz;
-        if (xx > maxx) maxx = xx; if (yy > maxy) maxy = yy; if (zz > maxz) maxz = zz;
-        const sz = Math.max(maxx - minx, maxy - miny, maxz - minz);
-        if (sz > 15) break;
-        cnt++; o += stride;
+    for (let stride of [12,24,32,36]) {
+      if (off+stride>len) continue;
+      const x0=dv.getFloat32(off,true), y0=dv.getFloat32(off+4,true), z0=dv.getFloat32(off+8,true);
+      if (!Number.isFinite(x0)||!Number.isFinite(y0)||!Number.isFinite(z0)) continue;
+      if (Math.abs(x0)>50||Math.abs(y0)>50||Math.abs(z0)>50) continue;
+      let minx=x0,miny=y0,minz=z0,maxx=x0,maxy=y0,maxz=z0;
+      let cnt=1,o=off+stride;
+      while(o+12<=len&&cnt<8000){
+        const xx=dv.getFloat32(o,true), yy=dv.getFloat32(o+4,true), zz=dv.getFloat32(o+8,true);
+        if (!Number.isFinite(xx)||!Number.isFinite(yy)||!Number.isFinite(zz)) break;
+        if (Math.abs(xx)>50||Math.abs(yy)>50||Math.abs(zz)>50) break;
+        if (xx<minx) minx=xx; if (yy<miny) miny=yy; if (zz<minz) minz=zz;
+        if (xx>maxx) maxx=xx; if (yy>maxy) maxy=yy; if (zz>maxz) maxz=zz;
+        const sz=Math.max(maxx-minx,maxy-miny,maxz-minz);
+        if (sz>15) break;
+        cnt++; o+=stride;
       }
-      if (cnt < 60) continue;
-      const size = Math.max(maxx - minx, maxy - miny, maxz - minz);
-      if (size < 0.15 || size > 15) continue;
-      if (candidates.some(c => c.offset === off && c.stride === stride)) continue;
-      candidates.push({ offset: off, vertCount: cnt, size, posOffset: off, stride, minx, miny, minz, maxx, maxy, maxz });
-      if (candidates.length >= 20) break;
+      if (cnt<60) continue;
+      const size=Math.max(maxx-minx,maxy-miny,maxz-minz);
+      if (size<0.15||size>15) continue;
+      if (candidates.some(c=>c.offset===off&&c.stride===stride)) continue;
+      candidates.push({offset:off,vertCount:cnt,size,posOffset:off,stride});
+      if (candidates.length>=20) break;
     }
-    if (candidates.length >= 20) break;
+    if (candidates.length>=20) break;
   }
-  candidates.sort((a, b) => b.vertCount - a.vertCount);
+  candidates.sort((a,b)=>b.vertCount-a.vertCount);
   console.log(`found ${candidates.length} raw candidates`);
-  for (let ci = 0; ci < Math.min(candidates.length, 5); ci++) {
-    const c = candidates[ci];
-    console.log(` cand ${ci}: cnt ${c.vertCount} @${c.offset} stride ${c.stride} sz ${c.size.toFixed(2)}`);
+  for (let i=0;i<Math.min(5,candidates.length);i++){
+    const c=candidates[i];
+    console.log(` cand ${i}: cnt ${c.vertCount} @${c.offset} stride ${c.stride} sz ${c.size.toFixed(2)}`);
   }
 
-  for (const cand of candidates) {
-    const cnt = cand.vertCount, posOff = cand.posOffset, stride = cand.stride;
-    const after = posOff + cnt * stride;
-    const isBig = cnt > 1000;
-    if (isBig) {
-      let hex = '', ints = '', u16s = '';
-      for (let i = 0; i < 32 && after + i < len; i++) hex += dv.getUint8(after + i).toString(16).padStart(2, '0') + ' ';
-      for (let i = 0; i < 4 && after + i * 4 + 4 <= len; i++) ints += dv.getInt32(after + i * 4, true) + ' ';
-      for (let i = 0; i < 8 && after + i * 2 + 2 <= len; i++) u16s += dv.getUint16(after + i * 2, true) + ' ';
+  for (const cand of candidates){
+    const cnt=cand.vertCount, posOff=cand.posOffset, stride=cand.stride;
+    const after=posOff+cnt*stride;
+    const isBig=cnt>1000;
+    if (isBig){
+      let hex='', ints='', u16s='';
+      for(let i=0;i<32&&after+i<len;i++) hex+=dv.getUint8(after+i).toString(16).padStart(2,'0')+' ';
+      for(let i=0;i<4&&after+i*4+4<=len;i++) ints+=dv.getInt32(after+i*4,true)+' ';
+      for(let i=0;i<8&&after+i*2+2<=len;i++) u16s+=dv.getUint16(after+i*2,true)+' ';
       console.log(`candidate cnt ${cnt} @${cand.offset} stride ${stride} sz ${cand.size.toFixed(2)} after ${after} hex ${hex} | int32 ${ints} | u16 ${u16s}`);
     }
-    // faces
-    for (let delta = 0; delta < 4096; delta += 4) {
-      const fo = after + delta;
-      if (fo + 4 > len) break;
-      const fr = tryFaces(posOff, cnt, stride, fo, isBig && delta === 0);
-      if (fr) {
-        const pos = new Float32Array(cnt * 3);
-        for (let i = 0; i < cnt; i++) { const p = getPos(posOff, stride, i); pos[i * 3] = p[0]; pos[i * 3 + 1] = p[1]; pos[i * 3 + 2] = p[2]; }
-        const idx = new Uint32Array(fr.tris.length * 3);
-        for (let i = 0; i < fr.tris.length; i++) { idx[i * 3] = fr.tris[i][0]; idx[i * 3 + 1] = fr.tris[i][1]; idx[i * 3 + 2] = fr.tris[i][2]; }
-        console.log(`Raw faces: cnt ${cnt} @${cand.offset} stride ${stride} delta ${delta} ${fr.mode} tris ${fr.tris.length}`);
-        return { positions: pos, indices: idx, vertCount: cnt, triCount: fr.tris.length, offset: cand.offset, size: cand.size, method: `raw-faces-${fr.mode}`, posOffset: posOff, stride };
+    // BRUTE FORCE ib without count prefix – look for runs of valid tris
+    const searchEnd=Math.min(len-6, after+300000);
+    let bestRun=null, bestLen=0;
+    for(let s=after; s<searchEnd-6; s+=2){
+      // quick check: 3 u16 < cnt
+      const a=dv.getUint16(s,true), b=dv.getUint16(s+2,true), c=dv.getUint16(s+4,true);
+      if (a>=cnt||b>=cnt||c>=cnt||a===0xFFFF||b===0xFFFF||c===0xFFFF) continue;
+      if (a===b||b===c||a===c) continue;
+      const area=triArea(posOff,stride,a,b,c);
+      if (area<1e-5||area>10) continue;
+      // extend run
+      let run=3, cur=s+6;
+      while(cur+2<len && run<20000){
+        const idx=dv.getUint16(cur,true);
+        if (idx>=cnt||idx===0xFFFF) break;
+        // check tri formed by last 2 + this? For list, need triplets
+        // For list, we need groups of 3 – so check if we have complete tri
+        if (run%3===2){
+          const a2=dv.getUint16(cur-4,true), b2=dv.getUint16(cur-2,true), c2=idx;
+          if (a2===b2||b2===c2||a2===c2) break;
+          const ar=triArea(posOff,stride,a2,b2,c2);
+          if (ar<1e-6||ar>10) break;
+        }
+        run++; cur+=2;
       }
-      if (isBig && delta === 0) console.log(`  no faces at after`);
+      if (run>=90 && run>bestLen){
+        bestLen=run;
+        bestRun={off:s,len:run, type:'u16'};
+      }
+      if (bestLen>5000) break;
     }
-    const searchEnd = Math.min(len - 6, after + 300000);
-    let ibTries = 0, ibRejectBad = 0, ibRejectRange = 0;
-    for (let s = after; s < searchEnd; s += 2) {
-      if (s + 2 + 60 > len) continue;
-      const ic = dv.getUint16(s, true);
-      if (ic < 60 || ic > cnt * 6 || ic % 3 !== 0) continue;
-      if (s + 2 + ic * 2 > len) continue;
-      ibTries++;
-      if (ibTries > 2000) break;
-      let ok = true, maxIdx = 0, bad = 0;
-      for (let i = 0; i < ic; i++) {
-        const idx = dv.getUint16(s + 2 + i * 2, true);
-        if (idx === 0xFFFF) continue;
-        if (idx >= cnt) { bad++; if (bad > ic * 0.15) { ok = false; break; } }
-        else if (idx > maxIdx) maxIdx = idx;
-      }
-      if (!ok) { ibRejectBad++; continue; }
-      if (maxIdx < cnt * 0.15) { ibRejectRange++; continue; }
-      // area
-      let first = -1;
-      for (let i = 0; i < ic - 2; i++) {
-        const a = dv.getUint16(s + 2 + i * 2, true), b = dv.getUint16(s + 2 + (i + 1) * 2, true), c = dv.getUint16(s + 2 + (i + 2) * 2, true);
-        if (a >= cnt || b >= cnt || c >= cnt || a === 0xFFFF || b === 0xFFFF || c === 0xFFFF) continue;
-        first = i; break;
-      }
-      if (first === -1) continue;
-      const ia = dv.getUint16(s + 2 + first * 2, true), ib = dv.getUint16(s + 2 + (first + 1) * 2, true), ic0 = dv.getUint16(s + 2 + (first + 2) * 2, true);
-      const pa = getPos(posOff, stride, ia), pb = getPos(posOff, stride, ib), pc = getPos(posOff, stride, ic0);
-      const abx = pb[0] - pa[0], aby = pb[1] - pa[1], abz = pb[2] - pa[2], acx = pc[0] - pa[0], acy = pc[1] - pa[1], acz = pc[2] - pa[2];
-      const crx = aby * acz - abz * acy, cry = abz * acx - abx * acz, crz = abx * acy - aby * acx;
-      const area = Math.sqrt(crx * crx + cry * cry + crz * crz) * 0.5;
-      if (area < 1e-6 || area > 10) continue;
-      const pos = new Float32Array(cnt * 3);
-      for (let i = 0; i < cnt; i++) { const p = getPos(posOff, stride, i); pos[i * 3] = p[0]; pos[i * 3 + 1] = p[1]; pos[i * 3 + 2] = p[2]; }
-      let out = [];
-      for (let i = 0; i < ic; i++) {
-        const idx = dv.getUint16(s + 2 + i * 2, true);
-        if (idx === 0xFFFF || idx >= cnt) continue;
-        out.push(idx);
-      }
-      out = out.slice(0, Math.floor(out.length / 3) * 3);
-      if (out.length < 60) continue;
-      const idx = new Uint32Array(out);
-      console.log(`Raw ib u16: cnt ${cnt} @${cand.offset} stride ${stride} ib ${ic} @${s} valid ${out.length} tris ${out.length/3} max ${maxIdx} bad ${bad}`);
-      return { positions: pos, indices: idx, vertCount: cnt, triCount: out.length / 3, offset: cand.offset, size: cand.size, method: `raw-ib-u16`, posOffset: posOff, stride };
+    if (bestRun){
+      console.log(`  brute u16 run found @${bestRun.off} len ${bestRun.len} tris ${Math.floor(bestRun.len/3)}`);
+      const pos=new Float32Array(cnt*3);
+      for(let i=0;i<cnt;i++){ const p=getPos(posOff,stride,i); pos[i*3]=p[0]; pos[i*3+1]=p[1]; pos[i*3+2]=p[2]; }
+      const outLen=Math.floor(bestRun.len/3)*3;
+      const idx=new Uint32Array(outLen);
+      for(let i=0;i<outLen;i++) idx[i]=dv.getUint16(bestRun.off+i*2,true);
+      console.log(`Raw ib u16 brute: cnt ${cnt} @${cand.offset} stride ${stride} ib ${outLen} tris ${outLen/3}`);
+      return {positions:pos,indices:idx,vertCount:cnt,triCount:outLen/3,offset:cand.offset,size:cand.size,method:`raw-ib-u16-brute`,posOffset:posOff,stride};
+    } else if(isBig){
+      console.log(`  no brute u16 run found for cnt ${cnt}`);
     }
-    if (isBig) console.log(`  u16 ib: tried ${ibTries} rejectBad ${ibRejectBad} rejectRange ${ibRejectRange}`);
-    // u32
-    let ib32Tries = 0;
-    for (let s = after; s < searchEnd; s += 4) {
-      if (s + 4 + 60 > len) continue;
-      const ic = dv.getInt32(s, true);
-      if (ic < 60 || ic > cnt * 6 || ic % 3 !== 0 || ic > 100000) continue;
-      if (s + 4 + ic * 4 > len) continue;
-      ib32Tries++;
-      if (ib32Tries > 2000) break;
-      let ok = true, maxIdx = 0;
-      for (let i = 0; i < ic; i++) {
-        const idx = dv.getInt32(s + 4 + i * 4, true);
-        if (idx < 0 || idx >= cnt) { ok = false; break; }
-        if (idx > maxIdx) maxIdx = idx;
+    // u32 brute
+    for(let s=after; s<searchEnd-12; s+=4){
+      const a=dv.getInt32(s,true), b=dv.getInt32(s+4,true), c=dv.getInt32(s+8,true);
+      if (a<0||a>=cnt||b<0||b>=cnt||c<0||c>=cnt) continue;
+      if (a===b||b===c||a===c) continue;
+      const area=triArea(posOff,stride,a,b,c);
+      if (area<1e-5||area>10) continue;
+      let run=3, cur=s+12;
+      while(cur+4<=len && run<20000){
+        const idx=dv.getInt32(cur,true);
+        if (idx<0||idx>=cnt) break;
+        run++; cur+=4;
       }
-      if (!ok) continue;
-      if (maxIdx < cnt * 0.15) continue;
-      const ia = dv.getInt32(s + 4, true), ib = dv.getInt32(s + 8, true), ic0 = dv.getInt32(s + 12, true);
-      const pa = getPos(posOff, stride, ia), pb = getPos(posOff, stride, ib), pc = getPos(posOff, stride, ic0);
-      const abx = pb[0] - pa[0], aby = pb[1] - pa[1], abz = pb[2] - pa[2], acx = pc[0] - pa[0], acy = pc[1] - pa[1], acz = pc[2] - pa[2];
-      const crx = aby * acz - abz * acy, cry = abz * acx - abx * acz, crz = abx * acy - aby * acx;
-      const area = Math.sqrt(crx * crx + cry * cry + crz * crz) * 0.5;
-      if (area < 1e-6 || area > 10) continue;
-      const pos = new Float32Array(cnt * 3);
-      for (let i = 0; i < cnt; i++) { const p = getPos(posOff, stride, i); pos[i * 3] = p[0]; pos[i * 3 + 1] = p[1]; pos[i * 3 + 2] = p[2]; }
-      const idx = new Uint32Array(ic);
-      for (let i = 0; i < ic; i++) idx[i] = dv.getInt32(s + 4 + i * 4, true);
-      console.log(`Raw ib u32: cnt ${cnt} @${cand.offset} stride ${stride} ib ${ic} @${s} tris ${ic/3} max ${maxIdx}`);
-      return { positions: pos, indices: idx, vertCount: cnt, triCount: ic / 3, offset: cand.offset, size: cand.size, method: `raw-ib-u32`, posOffset: posOff, stride };
+      if (run>=90){
+        console.log(`  brute u32 run found @${s} len ${run} tris ${Math.floor(run/3)}`);
+        const pos=new Float32Array(cnt*3);
+        for(let i=0;i<cnt;i++){ const p=getPos(posOff,stride,i); pos[i*3]=p[0]; pos[i*3+1]=p[1]; pos[i*3+2]=p[2]; }
+        const outLen=Math.floor(run/3)*3;
+        const idx=new Uint32Array(outLen);
+        for(let i=0;i<outLen;i++) idx[i]=dv.getInt32(s+i*4,true);
+        console.log(`Raw ib u32 brute: cnt ${cnt} @${cand.offset} stride ${stride} ib ${outLen} tris ${outLen/3}`);
+        return {positions:pos,indices:idx,vertCount:cnt,triCount:outLen/3,offset:cand.offset,size:cand.size,method:`raw-ib-u32-brute`,posOffset:posOff,stride};
+      }
     }
-    if (isBig) console.log(`  u32 ib tried ${ib32Tries}`);
+    if (isBig) console.log(`  no brute u32 run for cnt ${cnt}`);
   }
 
-  if (candidates.length) {
-    let best = candidates[0];
-    for (const c of candidates) if (c.vertCount > best.vertCount) best = c;
-    const pos = new Float32Array(best.vertCount * 3);
-    for (let i = 0; i < best.vertCount; i++) { const p = getPos(best.posOffset, best.stride, i); pos[i * 3] = p[0]; pos[i * 3 + 1] = p[1]; pos[i * 3 + 2] = p[2]; }
+  if (candidates.length){
+    let best=candidates[0];
+    for(const c of candidates) if(c.vertCount>best.vertCount) best=c;
+    const pos=new Float32Array(best.vertCount*3);
+    for(let i=0;i<best.vertCount;i++){ const p=getPos(best.posOffset,best.stride,i); pos[i*3]=p[0]; pos[i*3+1]=p[1]; pos[i*3+2]=p[2]; }
     console.log(`Point cloud: cnt ${best.vertCount} @${best.offset} stride ${best.stride} sz ${best.size.toFixed(2)}`);
-    return { positions: pos, indices: null, vertCount: best.vertCount, triCount: 0, offset: best.offset, size: best.size, method: `points-fallback`, posOffset: best.posOffset, stride: best.stride };
+    return {positions:pos,indices:null,vertCount:best.vertCount,triCount:0,offset:best.offset,size:best.size,method:`points-fallback`,posOffset:best.posOffset,stride:best.stride};
   }
   return null;
 }
