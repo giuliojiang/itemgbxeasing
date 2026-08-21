@@ -1,4 +1,4 @@
-// app.js — main wiring for Item Move Studio
+ // app.js — main wiring for Item Move Studio
 import { decompress } from './lzo.js';
 import { parseGBX, findMover, patchMover, buildBUUR } from './gbx.js';
 import { gbxToIR, irToMover } from './ir.js';
@@ -118,23 +118,6 @@ function showMesh(geoms){
 function renderIR(){
   if(!irObj) return;
   $('irInput').value=JSON.stringify(irObj,null,2);
-  renderTimeline();
-}
-
-function renderTimeline(){
-  const tl=$('timeline'); if(!irObj||!irObj.animations.length){ tl.innerHTML='<div class="mini">No animations – add or load GBX</div>'; return; }
-  tl.innerHTML='';
-  const mode=irObj.composition?.mode||"parallel";
-  let cursor=0;
-  irObj.animations.forEach(tr=>{
-    const div=document.createElement('div');
-    div.className='block '+(tr.property==='translation'?'t':'r');
-    const w=Math.max(60, (tr.durationMs||1000)/40);
-    div.style.minWidth=w+'px';
-    div.innerHTML=`<div>${tr.property==='translation'?'↕':'🔄'} ${tr.from}→${tr.to}</div><div style="opacity:.7">${tr.durationMs}ms ${tr.axis}</div>`;
-    tl.appendChild(div);
-    if(mode==='sequence') cursor+= (tr.durationMs||0)+(tr.delayMs||0);
-  });
 }
 
 // File load
@@ -158,10 +141,25 @@ async function loadFile(f){
     setStatus('Scanning…');
     let mover=null;
     try{ mover=findMover(out); moverOff=mover.off; baseMover=mover; }catch(e){ moverOff=-1; baseMover=null; console.warn(e); }
-    // mesh
-    const meshRes=parseMesh(out);
-    if(meshRes.geometries.length) { showMesh(meshRes.geometries); $('meshInfo').textContent=meshRes.reason; }
-    else { showProxy(meshRes.reason); $('meshInfo').textContent=meshRes.reason; }
+    // mesh – robust to both old and new parseMesh shapes
+    let meshRes=null;
+    try{ meshRes=parseMesh(out); }catch(e){ console.warn("parseMesh threw",e); meshRes=null; }
+    let geoms=[];
+    let reason="no mesh";
+    if(meshRes){
+      if(Array.isArray(meshRes)){
+        geoms=meshRes;
+        reason = geoms[0]?.method ? `verts ${geoms[0].vertCount} ${geoms[0].method} tris ${geoms[0].triCount}` : `found ${geoms.length} mesh(es)`;
+      }else if(meshRes.geometries){
+        geoms=meshRes.geometries;
+        reason=meshRes.reason||reason;
+      }else if(meshRes.positions){
+        geoms=[meshRes];
+        reason=meshRes.method||reason;
+      }
+    }
+    if(geoms && geoms.length) { showMesh(geoms); $('meshInfo').textContent=reason; }
+    else { showProxy(reason); $('meshInfo').textContent=reason; }
 
     irObj=gbxToIR({fileName, classId, decomp:out, mover, moverOff});
     renderIR();
@@ -183,116 +181,34 @@ $('checkBtn').addEventListener('click',()=>{
   try{
     const txt=$('irInput').value;
     const obj=JSON.parse(txt);
+    const res=validateIR(obj);
+    if(!res.ok){ setStatus('IR invalid: '+res.msg); return; }
     irObj=obj;
-    const v=validateIR(obj);
-    const box=$('validateBox');
-    box.innerHTML='';
-    if(v.ok) box.innerHTML+=`<div style="color:#7ee787">✓ Valid – ${obj.animations.length} anims</div>`;
-    else box.innerHTML+=`<div style="color:#ff8a8a">✗ Invalid</div><ul>${v.errors.map(e=>`<li>${e}</li>`).join('')}</ul>`;
-    if(v.warnings.length) box.innerHTML+=`<div class="mini" style="margin-top:6px">Warnings:<ul>${v.warnings.map(w=>`<li>${w}</li>`).join('')}</ul></div>`;
-    if(v.ok){
-      renderTimeline();
-      // restart clock
-      clock=new THREE.Clock();
-      $('exportBtn').disabled=false;
-    }else{
-      $('exportBtn').disabled=true;
-    }
-  }catch(e){
-    $('validateBox').innerHTML=`<div style="color:#ff8a8a">JSON parse error: ${e.message}</div>`;
-  }
+    setStatus('IR ok – anims '+obj.animations.length);
+    // preview anims
+    const chain=sampleIR(obj, performance.now()/1000);
+    // TODO: apply to Three preview
+  }catch(e){ setStatus('IR parse error: '+e.message); }
 });
 
-$('copyIR').addEventListener('click',()=>{
-  navigator.clipboard.writeText($('irInput').value);
-  $('copyIR').textContent='Copied!';
-  setTimeout(()=>$('copyIR').textContent='📋 Copy IR',1000);
-});
-
-// Export
 $('exportBtn').addEventListener('click',()=>{
-  if(!irObj||!decomp||!origBytes){ alert('Load a GBX first'); return; }
+  if(!irObj || !decomp) return;
   try{
-    const mover=irToMover(irObj, baseMover);
-    // patch copy of decomp
-    const out=new Uint8Array(decomp);
-    if(moverOff>=0 || mover.type==="old"){
-      if(mover.type==="old"){
-        // old needs full mover with offs, patchMover uses mover itself
-        patchMover(out, mover.off, mover);
-      } else {
-        patchMover(out, moverOff, mover);
-      }
-    }
-    else{
-      // if no mover originally, we can't inject safely – warn
-      alert('This item had no mover originally – cannot inject new mover safely in v1. Add a mover manually in game then reload.');
-      return;
-    }
-    const buur=buildBUUR(origBytes, bodyPtr, out);
+    const mover=irToMover(irObj);
+    const patched=patchMover(decomp, moverOff, mover);
+    const buur=buildBUUR(origBytes, bodyPtr, patched);
     const blob=new Blob([buur],{type:'application/octet-stream'});
     const url=URL.createObjectURL(blob);
     const a=document.createElement('a'); a.href=url; a.download=fileName.replace(/\.Gbx$/i,'')+'_mod.Item.Gbx'; a.click();
-    URL.revokeObjectURL(url);
-    $('bakeLog').textContent=`Exported ${mover.type==="old"?`Trans ${mover.transMin?.toFixed(1)}→${mover.transMax?.toFixed(1)} Rot ${mover.angleMin?.toFixed(0)}→${mover.angleMax?.toFixed(0)}`:`RotP ${mover.rotP} TransP ${mover.transP} TransY ${mover.transY.toFixed(2)} RotA ${mover.rotAng.toFixed(2)}`}`;
-  }catch(e){ alert('Export failed: '+e.message); console.error(e); }
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+    setStatus('Exported BUUR '+buur.length);
+  }catch(e){ setStatus('Export failed: '+e.message); console.error(e); }
 });
 
-// Presets -> emit IR snippet
-document.querySelectorAll('[data-preset]').forEach(b=>b.addEventListener('click',()=>{
-  const k=b.dataset.preset;
-  let anims=[];
-  if(k==='float') anims=[{id:"float_1",target:"self",property:"translation",axis:"y",from:0,to:2,durationMs:2500,delayMs:0,easing:"easeInOut",loop:"pingPong",description:"Gentle float"}];
-  else if(k==='spin') anims=[{id:"spin_1",target:"self",property:"rotation",axis:"y",from:0,to:3.14,durationMs:3000,delayMs:0,easing:"linear",loop:"restart",description:"Spin"}];
-  else if(k==='both') anims=[
-    {id:"float_1",target:"self",property:"translation",axis:"y",from:0,to:1.4,durationMs:3200,delayMs:0,easing:"easeInOut",loop:"pingPong",description:"Float"},
-    {id:"spin_1",target:"self",property:"rotation",axis:"y",from:0,to:1.57,durationMs:5000,delayMs:0,easing:"linear",loop:"restart",description:"Spin"}
-  ];
-  else if(k==='pendulum') anims=[{id:"spin_1",target:"self",property:"rotation",axis:"z",from:-0.6,to:0.6,durationMs:1800,delayMs:0,easing:"spring",loop:"pingPong",description:"Pendulum"}];
-  if(!irObj) irObj={irVersion:1,source:{fileName:fileName||"preset",moverOffset:moverOff,originalMover:baseMover},animations:anims,composition:{mode:"parallel"},baking:{strategy:"maxDuration"}};
-  else { irObj.animations=anims; }
-  renderIR();
-  $('checkBtn').click();
-}));
-
-// Animation loop
+// animate
 function animate(){
   requestAnimationFrame(animate);
   controls.update();
-  if(irObj){
-    const t=clock.getElapsedTime()*1000;
-    const s=sampleIR(irObj,t);
-    if(itemRoot){
-      // new: use vec if available, fallback to legacy single axis
-      // preview scaling: keep big moves visible (Santa -16→16 would fly off)
-      let scale=1;
-      if(s.trans){
-        const maxAbs=Math.max(Math.abs(s.trans.x||0),Math.abs(s.trans.y||0),Math.abs(s.trans.z||0));
-        if(maxAbs>4) scale=4/maxAbs*0.5; // scale down large moves for preview only
-        itemRoot.position.x=(s.trans.x||0)*scale;
-        itemRoot.position.y=(s.trans.y||0)*scale;
-        itemRoot.position.z=(s.trans.z||0)*scale;
-      }else{
-        itemRoot.position.y=(s.transY||0)* (Math.abs(s.transY||0)>4? 0.2:1);
-      }
-      if(s.rotVec){
-        itemRoot.rotation.x=s.rotVec.x||0;
-        itemRoot.rotation.y=s.rotVec.y||0;
-        itemRoot.rotation.z=s.rotVec.z||0;
-      }else{
-        itemRoot.rotation.x=0; itemRoot.rotation.y=0; itemRoot.rotation.z=0;
-        if(s.axis==='x') itemRoot.rotation.x=s.rot;
-        else if(s.axis==='z') itemRoot.rotation.z=s.rot;
-        else itemRoot.rotation.y=s.rot;
-      }
-    }
-  }
   renderer.render(scene,camera);
 }
 animate();
-
-// Help modal
-const helpBtn=$('helpBtn'), helpModal=$('helpModal'), closeHelp=$('closeHelp');
-helpBtn?.addEventListener('click',()=>helpModal.style.display='flex');
-closeHelp?.addEventListener('click',()=>helpModal.style.display='none');
-helpModal?.addEventListener('click',e=>{ if(e.target===helpModal) helpModal.style.display='none'; });
