@@ -136,6 +136,11 @@ export function findMesh(decomp) {
     // dump first verts for big ones
     if(cnt>800){
       console.log(`  cand ${cnt}@${cand.offset} s${stride} v0 ${getPosStrided(posOff,stride,0).map(x=>x.toFixed(3)).join(',')} v1 ${getPosStrided(posOff,stride,1).map(x=>x.toFixed(3)).join(',')} v2 ${getPosStrided(posOff,stride,2).map(x=>x.toFixed(3)).join(',')}`);
+      if(stride===24){
+        const v0b=[dv.getFloat32(posOff+12,true),dv.getFloat32(posOff+16,true),dv.getFloat32(posOff+20,true)];
+        const v1b=[dv.getFloat32(posOff+36,true),dv.getFloat32(posOff+40,true),dv.getFloat32(posOff+44,true)];
+        console.log(`   v0+12 ${v0b.map(x=>x.toFixed(3)).join(',')} v1+12 ${v1b.map(x=>x.toFixed(3)).join(',')}`);
+      }
     }
     for(let s=after; s<Math.min(len-16, after+100000); s++){
       const v=dv.getInt32(s,true);
@@ -168,10 +173,16 @@ export function findMesh(decomp) {
           }
           console.log(`    delta ib @${s} cnt ${count} max ${maxI} valid ${valid}/${total} flags ${flags}`);
           if(valid===0) continue;
+          // try both pos at 0 and pos at +12 for stride 24, pick less degenerate
+          let bestPos=null, bestValid=-1, bestPosOff=posOff;
+          const tryOffsets=stride===24?[0,12]:[0];
+          for(const po of tryOffsets){
+            let valid=0; for(let i=0;i<Math.min(count-2,30); i+=3){ const a=indices[i], b=indices[i+1], c=indices[i+2]; if(a===b||b===c||a===c) continue; const pa=[dv.getFloat32(posOff+po+a*stride,true),dv.getFloat32(posOff+po+a*stride+4,true),dv.getFloat32(posOff+po+a*stride+8,true)]; const pb=[dv.getFloat32(posOff+po+b*stride,true),dv.getFloat32(posOff+po+b*stride+4,true),dv.getFloat32(posOff+po+b*stride+8,true)]; const pc=[dv.getFloat32(posOff+po+c*stride,true),dv.getFloat32(posOff+po+c*stride+4,true),dv.getFloat32(posOff+po+c*stride+8,true)]; const abx=pb[0]-pa[0],aby=pb[1]-pa[1],abz=pb[2]-pa[2], acx=pc[0]-pa[0],acy=pc[1]-pa[1],acz=pc[2]-pa[2]; const crx=aby*acz-abz*acy, cry=abz*acx-abx*acz, crz=abx*acy-aby*acx; const ar=Math.sqrt(crx*crx+cry*cry+crz*crz)*0.5; if(ar>1e-6&&ar<20) valid++; } if(valid>bestValid){ bestValid=valid; bestPosOff=posOff+po; }
+          }
           const pos=new Float32Array(cnt*3);
-          for(let i=0;i<cnt;i++){ const pp=getPosStrided(posOff,stride,i); pos[i*3]=pp[0]; pos[i*3+1]=pp[1]; pos[i*3+2]=pp[2]; }
-          console.log(`Raw ib delta: cnt ${cnt} @${cand.offset} stride ${stride} ib ${count} tris ${count/3} max ${maxI}`);
-          return {positions:pos,indices:indices,vertCount:cnt,triCount:count/3,offset:cand.offset,size:cand.size,method:`raw-ib-delta-new`,posOffset:posOff,stride};
+          for(let i=0;i<cnt;i++){ pos[i*3]=dv.getFloat32(bestPosOff+i*stride,true); pos[i*3+1]=dv.getFloat32(bestPosOff+i*stride+4,true); pos[i*3+2]=dv.getFloat32(bestPosOff+i*stride+8,true); }
+          console.log(`Raw ib delta: cnt ${cnt} @${cand.offset} stride ${stride} ib ${count} tris ${count/3} max ${maxI} bestOff ${bestPosOff-posOff} valid ${bestValid}`);
+          return {positions:pos,indices:indices,vertCount:cnt,triCount:count/3,offset:cand.offset,size:cand.size,method:`raw-ib-delta-new`,posOffset:bestPosOff,stride};
         } else {
           if(p+8+count*2>len) continue;
           let ok=true, maxI=0;
