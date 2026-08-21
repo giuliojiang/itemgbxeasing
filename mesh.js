@@ -2,23 +2,22 @@ export function findMesh(decomp){
   const dv=new DataView(decomp.buffer,decomp.byteOffset,decomp.byteLength);
   const len=decomp.length;
   console.log(`findMesh len ${len}`);
-  function triAreaOff(posOff,offInStride,stride,a,b,c){
-    const ax=dv.getFloat32(posOff+offInStride+a*stride,true), ay=dv.getFloat32(posOff+offInStride+a*stride+4,true), az=dv.getFloat32(posOff+offInStride+a*stride+8,true);
-    const bx=dv.getFloat32(posOff+offInStride+b*stride,true), by=dv.getFloat32(posOff+offInStride+b*stride+4,true), bz=dv.getFloat32(posOff+offInStride+b*stride+8,true);
-    const cx=dv.getFloat32(posOff+offInStride+c*stride,true), cy=dv.getFloat32(posOff+offInStride+c*stride+4,true), cz=dv.getFloat32(posOff+offInStride+c*stride+8,true);
+  function triArea(posOff,stride,a,b,c,po=0){
+    const ax=dv.getFloat32(posOff+po+a*stride,true), ay=dv.getFloat32(posOff+po+a*stride+4,true), az=dv.getFloat32(posOff+po+a*stride+8,true);
+    const bx=dv.getFloat32(posOff+po+b*stride,true), by=dv.getFloat32(posOff+po+b*stride+4,true), bz=dv.getFloat32(posOff+po+b*stride+8,true);
+    const cx=dv.getFloat32(posOff+po+c*stride,true), cy=dv.getFloat32(posOff+po+c*stride+4,true), cz=dv.getFloat32(posOff+po+c*stride+8,true);
     if(!Number.isFinite(ax)||!Number.isFinite(ay)||!Number.isFinite(az)||!Number.isFinite(bx)||!Number.isFinite(by)||!Number.isFinite(bz)||!Number.isFinite(cx)||!Number.isFinite(cy)||!Number.isFinite(cz)) return 0;
     const abx=bx-ax, aby=by-ay, abz=bz-az, acx=cx-ax, acy=cy-ay, acz=cz-az;
     const crx=aby*acz-abz*acy, cry=abz*acx-abx*acz, crz=abx*acy-aby*acx;
     return Math.sqrt(crx*crx+cry*cry+crz*crz)*0.5;
   }
-  // 1. Crystal
+  // 1. Crystal (old)
   for(let off=0;off<len-4-60*12;off+=4){
     const cnt=dv.getInt32(off,true);
     if(cnt<80||cnt>6000) continue;
     const posOff=off+4;
     if(posOff+cnt*12>len) continue;
-    let minx=1e9,miny=1e9,minz=1e9,maxx=-1e9,maxy=-1e9,maxz=-1e9;
-    let ok=true,zero=0;
+    let minx=1e9,miny=1e9,minz=1e9,maxx=-1e9,maxy=-1e9,maxz=-1e9, ok=true, zero=0;
     for(let i=0;i<Math.min(cnt,60);i++){
       const x=dv.getFloat32(posOff+i*12,true), y=dv.getFloat32(posOff+i*12+4,true), z=dv.getFloat32(posOff+i*12+8,true);
       if(!Number.isFinite(x)||!Number.isFinite(y)||!Number.isFinite(z)){ok=false;break;}
@@ -28,10 +27,9 @@ export function findMesh(decomp){
       if(x>maxx)maxx=x; if(y>maxy)maxy=y; if(z>maxz)maxz=z;
     }
     if(!ok||zero>30) continue;
-    const sx=maxx-minx,sy=maxy-miny,sz=maxz-minz;
-    const size=Math.max(sx,sy,sz);
+    const size=Math.max(maxx-minx,maxy-miny,maxz-minz);
     if(size<0.2||size>12) continue;
-    if(Math.min(sx,sy,sz)<size*0.02&&cnt>200) continue;
+    if(Math.min(maxx-minx,maxy-miny,maxz-minz)<size*0.02&&cnt>200) continue;
     const after=posOff+cnt*12;
     if(after+4>len) continue;
     const edgeCnt=dv.getInt32(after,true);
@@ -52,45 +50,14 @@ export function findMesh(decomp){
     console.log(`Crystal mesh: cnt ${cnt} @${off} sz ${size.toFixed(2)} edge ${edgeCnt} tris ${tris.length}`);
     return {positions,indices,vertCount:cnt,triCount:tris.length,offset:off,size,method:`crystal-edges`,posOffset:posOff,stride:12};
   }
-  // 2. Build forward float-run candidates (no NaN)
-  let candidates=[];
-  for(let off=0;off<len-12;off+=4){
-    for(let stride of [12,24,32,36]){
-      if(off+stride>len) continue;
-      const x0=dv.getFloat32(off,true),y0=dv.getFloat32(off+4,true),z0=dv.getFloat32(off+8,true);
-      if(!Number.isFinite(x0)||!Number.isFinite(y0)||!Number.isFinite(z0)) continue;
-      if(Math.abs(x0)>50||Math.abs(y0)>50||Math.abs(z0)>50) continue;
-      let minx=x0,miny=y0,minz=z0,maxx=x0,maxy=y0,maxz=z0,cnt=1,o=off+stride, hasNaN=false;
-      while(o+12<=len&&cnt<8000){
-        const xx=dv.getFloat32(o,true),yy=dv.getFloat32(o+4,true),zz=dv.getFloat32(o+8,true);
-        if(!Number.isFinite(xx)||!Number.isFinite(yy)||!Number.isFinite(zz)){ hasNaN=true; break; }
-        if(Math.abs(xx)>50||Math.abs(yy)>50||Math.abs(zz)>50) break;
-        if(xx<minx)minx=xx; if(yy<miny)miny=yy; if(zz<minz)minz=zz;
-        if(xx>maxx)maxx=xx; if(yy>maxy)maxy=yy; if(zz>maxz)maxz=zz;
-        if(Math.max(maxx-minx,maxy-miny,maxz-minz)>15) break;
-        cnt++; o+=stride;
-      }
-      if(hasNaN) continue;
-      if(cnt<80) continue;
-      const size=Math.max(maxx-minx,maxy-miny,maxz-minz);
-      if(size<0.2||size>15) continue;
-      if(candidates.some(c=>c.offset===off&&c.stride===stride)) continue;
-      candidates.push({offset:off,vertCount:cnt,size,posOffset:off,stride});
-      if(candidates.length>=24) break;
-    }
-    if(candidates.length>=24) break;
-  }
-  candidates.sort((a,b)=>b.vertCount-a.vertCount);
-  console.log(`found ${candidates.length} raw candidates`);
-  for(let i=0;i<Math.min(5,candidates.length);i++) console.log(` cand ${i}: cnt ${candidates[i].vertCount} @${candidates[i].offset} stride ${candidates[i].stride} sz ${candidates[i].size.toFixed(2)}`);
 
-  // 3. Find IndexBuffers and pair with candidates
+  // 2. Solid2Model – find all IndexBuffers
+  let ibs=[];
   for(let s=0;s<len-16;s++){
     const v=dv.getInt32(s,true);
-    if(v!==0x09057001&&v!==0x09057000) continue;
+    if(v!==0x09057001 && v!==0x09057000) continue;
     const isNew=(v===0x09057001);
     let p=s+4; if(p+8>len) continue;
-    const flags=dv.getInt32(p,true);
     const count=dv.getInt32(p+4,true);
     if(count<60||count>20000||count%3!==0) continue;
     if(p+8+count*2>len) continue;
@@ -98,43 +65,126 @@ export function findMesh(decomp){
     const indices=new Uint32Array(count);
     if(isNew){
       for(let i=0;i<count;i++){const d=dv.getInt16(p+8+i*2,true); cur+=d; if(cur<0||cur>20000){ok=false;break;} indices[i]=cur; if(cur>maxI) maxI=cur;}
-    } else {
+    }else{
       for(let i=0;i<count;i++){const idx=dv.getUint16(p+8+i*2,true); if(idx>20000){ok=false;break;} indices[i]=idx; if(idx>maxI) maxI=idx;}
     }
-    if(!ok) continue;
-    if(maxI<50) continue;
-    // try candidates that end before s and have enough verts
-    for(const cand of candidates){
-      if(cand.vertCount<=maxI) continue;
-      if(cand.offset+cand.vertCount*cand.stride > s+8000) continue; // must be before ib (allow some header)
-      if(s - (cand.offset+cand.vertCount*cand.stride) > 100000) continue;
-      // check verts finite (already)
-      const tryOffs=cand.stride===24?[0,12]:[0];
-      let bestValid=0,bestOff=0;
-      for(const po of tryOffs){
-        let valid=0;
-        for(let i=0;i<Math.min(count-2,30);i+=3){const a=indices[i],b=indices[i+1],c=indices[i+2]; if(a===b||b===c||a===c) continue; const ar=triAreaOff(cand.posOffset,po,cand.stride,a,b,c); if(ar>1e-6&&ar<20) valid++;}
-        if(valid>bestValid){bestValid=valid; bestOff=po;}
+    if(!ok||maxI<20) continue;
+    ibs.push({offset:s,count,maxI,indices,isNew});
+    if(ibs.length>=8) break;
+  }
+  console.log(`found ${ibs.length} IndexBuffers`);
+  for(let ib of ibs) console.log(` ib @${ib.offset} cnt ${ib.count} max ${ib.maxI} ${ib.isNew?'delta':'direct'}`);
+
+  // Build float-run candidates for fallback
+  let candidates=[];
+  for(let off=0;off<len-12;off+=4){
+    for(let stride of [12,24]){
+      if(off+stride>len) continue;
+      const x0=dv.getFloat32(off,true),y0=dv.getFloat32(off+4,true),z0=dv.getFloat32(off+8,true);
+      if(!Number.isFinite(x0)||!Number.isFinite(y0)||!Number.isFinite(z0)) continue;
+      if(Math.abs(x0)>50||Math.abs(y0)>50||Math.abs(z0)>50) continue;
+      let minx=x0,miny=y0,minz=z0,maxx=x0,maxy=y0,maxz=z0,cnt=1,o=off+stride, bad=false;
+      while(o+12<=len&&cnt<8000){
+        const xx=dv.getFloat32(o,true),yy=dv.getFloat32(o+4,true),zz=dv.getFloat32(o+8,true);
+        if(!Number.isFinite(xx)||!Number.isFinite(yy)||!Number.isFinite(zz)){bad=true;break;}
+        if(Math.abs(xx)>50||Math.abs(yy)>50||Math.abs(zz)>50) break;
+        if(xx<minx)minx=xx; if(yy<miny)miny=yy; if(zz<minz)minz=zz;
+        if(xx>maxx)maxx=xx; if(yy>maxy)maxy=yy; if(zz>maxz)maxz=zz;
+        if(Math.max(maxx-minx,maxy-miny,maxz-minz)>15) break;
+        cnt++; o+=stride;
       }
-      if(bestValid<4) continue;
-      const cntVerts=cand.vertCount;
-      const pos=new Float32Array(cntVerts*3);
-      for(let i=0;i<cntVerts;i++){pos[i*3]=dv.getFloat32(cand.posOffset+bestOff+i*cand.stride,true); pos[i*3+1]=dv.getFloat32(cand.posOffset+bestOff+i*cand.stride+4,true); pos[i*3+2]=dv.getFloat32(cand.posOffset+bestOff+i*cand.stride+8,true);}
-      // final NaN check
-      let hasNaN=false; for(let i=0;i<pos.length;i++) if(!Number.isFinite(pos[i])){hasNaN=true;break;}
-      if(hasNaN) continue;
-      console.log(`Solid2Model paired: ib @${s} cnt ${count} max ${maxI} with verts ${cntVerts} @${cand.offset} stride ${cand.stride} off ${bestOff} sz ${cand.size.toFixed(2)} valid ${bestValid} flags ${flags}`);
-      return {positions:pos,indices:indices,vertCount:cntVerts,triCount:count/3,offset:cand.offset,size:cand.size,method:`solid2model-${isNew?'delta':'direct'}`,posOffset:cand.posOffset+bestOff,stride:cand.stride,ibOffset:s};
+      if(bad) continue;
+      if(cnt<80) continue;
+      const size=Math.max(maxx-minx,maxy-miny,maxz-minz);
+      if(size<0.2||size>15) continue;
+      if(candidates.some(c=>c.offset===off&&c.stride===stride)) continue;
+      candidates.push({offset:off,vertCount:cnt,size,posOffset:off,stride});
+      if(candidates.length>=32) break;
+    }
+    if(candidates.length>=32) break;
+  }
+  candidates.sort((a,b)=>b.vertCount-a.vertCount);
+  console.log(`found ${candidates.length} raw candidates`);
+  for(let i=0;i<Math.min(5,candidates.length);i++) console.log(` cand ${i}: cnt ${candidates[i].vertCount} @${candidates[i].offset} stride ${candidates[i].stride} sz ${candidates[i].size.toFixed(2)}`);
+
+  // Try pairings – best score wins
+  let best=null, bestScore=-1;
+  for(let ib of ibs){
+    // Try direct offset = ib.offset - (maxI+1)*stride
+    for(let stride of [12,24]){
+      for(let gap of [0,4,8,12,16,24,32,48,64,84,96,128]){
+        const vc=ib.maxI+1;
+        const off=ib.offset - vc*stride - gap;
+        if(off<0||off+vc*stride>len) continue;
+        // quick finite check first and last
+        const x0=dv.getFloat32(off,true), y0=dv.getFloat32(off+4,true), z0=dv.getFloat32(off+8,true);
+        const x1=dv.getFloat32(off+(vc-1)*stride,true), y1=dv.getFloat32(off+(vc-1)*stride+4,true), z1=dv.getFloat32(off+(vc-1)*stride+8,true);
+        if(!Number.isFinite(x0)||!Number.isFinite(y0)||!Number.isFinite(z0)||!Number.isFinite(x1)||!Number.isFinite(y1)||!Number.isFinite(z1)) continue;
+        if(Math.abs(x0)>50||Math.abs(y0)>50||Math.abs(z0)>50||Math.abs(x1)>50||Math.abs(y1)>50||Math.abs(z1)>50) continue;
+        // full finite scan (sample)
+        let ok=true, minx=x0,miny=y0,minz=z0,maxx=x0,maxy=y0,maxz=z0;
+        for(let i=0;i<vc;i+=Math.max(1,Math.floor(vc/30))){
+          const xx=dv.getFloat32(off+i*stride,true), yy=dv.getFloat32(off+i*stride+4,true), zz=dv.getFloat32(off+i*stride+8,true);
+          if(!Number.isFinite(xx)||!Number.isFinite(yy)||!Number.isFinite(zz)){ok=false;break;}
+          if(Math.abs(xx)>50||Math.abs(yy)>50||Math.abs(zz)>50){ok=false;break;}
+          if(xx<minx)minx=xx; if(yy<miny)miny=yy; if(zz<minz)minz=zz;
+          if(xx>maxx)maxx=xx; if(yy>maxy)maxy=yy; if(zz>maxz)maxz=zz;
+        }
+        if(!ok) continue;
+        const size=Math.max(maxx-minx,maxy-miny,maxz-minz);
+        if(size<0.15||size>15) continue;
+        // try both pos offsets for stride 24
+        const tryOffs=stride===24?[0,12]:[0];
+        for(let po of tryOffs){
+          let valid=0;
+          for(let i=0;i<Math.min(ib.count-2,60);i+=3){const a=ib.indices[i],b=ib.indices[i+1],c=ib.indices[i+2]; if(a>=vc||b>=vc||c>=vc) continue; if(a===b||b===c||a===c) continue; const ar=triArea(off,stride,a,b,c,po); if(ar>1e-6&&ar<20) valid++;}
+          if(valid<5) continue;
+          const score=valid*1000 - gap - (vc<500?0:0); // prefer low gap, high valid
+          if(score>bestScore){
+            bestScore=score;
+            best={ib,off,vc,size,stride,po,valid,gap};
+          }
+        }
+      }
+    }
+    // Also try pairing with float-run candidates
+    for(let cand of candidates){
+      if(cand.vertCount<=ib.maxI) continue;
+      if(cand.offset+cand.vertCount*cand.stride>ib.offset+2000) continue;
+      if(ib.offset - (cand.offset+cand.vertCount*cand.stride) > 100000) continue;
+      const tryOffs=cand.stride===24?[0,12]:[0];
+      for(let po of tryOffs){
+        let valid=0;
+        for(let i=0;i<Math.min(ib.count-2,60);i+=3){const a=ib.indices[i],b=ib.indices[i+1],c=ib.indices[i+2]; if(a>=cand.vertCount||b>=cand.vertCount||c>=cand.vertCount) continue; if(a===b||b===c||a===c) continue; const ar=triArea(cand.posOffset,cand.stride,a,b,c,po); if(ar>1e-6&&ar<20) valid++;}
+        if(valid<4) continue;
+        const gap=ib.offset-(cand.offset+cand.vertCount*cand.stride);
+        const score=valid*800 - gap*0.1 - (cand.vertCount/(ib.maxI+1))*10;
+        if(score>bestScore){
+          bestScore=score;
+          best={ib,off:cand.posOffset,vc:cand.vertCount,size:cand.size,stride:cand.stride,po,valid,gap,cand:true};
+        }
+      }
+    }
+  }
+  if(best){
+    const ib=best.ib;
+    const cntVerts=best.vc;
+    const pos=new Float32Array(cntVerts*3);
+    for(let i=0;i<cntVerts;i++){pos[i*3]=dv.getFloat32(best.off+best.po+i*best.stride,true); pos[i*3+1]=dv.getFloat32(best.off+best.po+i*best.stride+4,true); pos[i*3+2]=dv.getFloat32(best.off+best.po+i*best.stride+8,true);}
+    let hasNaN=false; for(let i=0;i<pos.length;i++) if(!Number.isFinite(pos[i])){hasNaN=true;break;}
+    if(!hasNaN){
+      console.log(`Solid2Model BEST: ib @${ib.offset} cnt ${ib.count} max ${ib.maxI} with verts ${cntVerts} @${best.off} stride ${best.stride} off ${best.po} sz ${best.size.toFixed(2)} valid ${best.valid} gap ${best.gap} ${best.cand?'cand':'direct'}`);
+      return {positions:pos,indices:ib.indices,vertCount:cntVerts,triCount:ib.count/3,offset:best.off,size:best.size,method:`solid2model-best`,posOffset:best.off+best.po,stride:best.stride,ibOffset:ib.offset};
     }
   }
 
   if(candidates.length){
-    let best=candidates[0];
-    for(const c of candidates) if(c.vertCount>best.vertCount) best=c;
-    const pos=new Float32Array(best.vertCount*3);
-    for(let i=0;i<best.vertCount;i++){pos[i*3]=dv.getFloat32(best.posOffset+i*12,true); pos[i*3+1]=dv.getFloat32(best.posOffset+i*12+4,true); pos[i*3+2]=dv.getFloat32(best.posOffset+i*12+8,true);}
-    console.log(`Point cloud fallback: cnt ${best.vertCount} @${best.offset} stride ${best.stride} sz ${best.size.toFixed(2)}`);
-    return {positions:pos,indices:null,vertCount:best.vertCount,triCount:0,offset:best.offset,size:best.size,method:`points-fallback`,posOffset:best.posOffset,stride:best.stride};
+    let b=candidates[0];
+    for(let c of candidates) if(c.vertCount>b.vertCount) b=c;
+    const pos=new Float32Array(b.vertCount*3);
+    for(let i=0;i<b.vertCount;i++){pos[i*3]=dv.getFloat32(b.posOffset+i*b.stride,true); pos[i*3+1]=dv.getFloat32(b.posOffset+i*b.stride+4,true); pos[i*3+2]=dv.getFloat32(b.posOffset+i*b.stride+8,true);}
+    console.log(`Point cloud fallback: cnt ${b.vertCount} @${b.offset} stride ${b.stride} sz ${b.size.toFixed(2)}`);
+    return {positions:pos,indices:null,vertCount:b.vertCount,triCount:0,offset:b.offset,size:b.size,method:`points-fallback`,posOffset:b.posOffset,stride:b.stride};
   }
   return null;
 }
