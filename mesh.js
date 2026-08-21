@@ -24,6 +24,14 @@ export function findMesh(decomp) {
     const crx=aby*acz-abz*acy, cry=abz*acx-abx*acz, crz=abx*acy-aby*acx;
     return Math.sqrt(crx*crx+cry*cry+crz*crz)*0.5;
   }
+  function triAreaOff(posOff,offInStride,stride,a,b,c){
+    const ax=dv.getFloat32(posOff+offInStride+a*stride,true), ay=dv.getFloat32(posOff+offInStride+a*stride+4,true), az=dv.getFloat32(posOff+offInStride+a*stride+8,true);
+    const bx=dv.getFloat32(posOff+offInStride+b*stride,true), by=dv.getFloat32(posOff+offInStride+b*stride+4,true), bz=dv.getFloat32(posOff+offInStride+b*stride+8,true);
+    const cx=dv.getFloat32(posOff+offInStride+c*stride,true), cy=dv.getFloat32(posOff+offInStride+c*stride+4,true), cz=dv.getFloat32(posOff+offInStride+c*stride+8,true);
+    const abx=bx-ax, aby=by-ay, abz=bz-az, acx=cx-ax, acy=cy-ay, acz=cz-az;
+    const crx=aby*acz-abz*acy, cry=abz*acx-abx*acz, crz=abx*acy-aby*acx;
+    return Math.sqrt(crx*crx+cry*cry+crz*crz)*0.5;
+  }
 
   // 1. Crystal edge->tris (old Item.Gbx) – for RotBalloons 2856v
   for (let off = 0; off < len - 4 - 60 * 12; off += 4) {
@@ -98,10 +106,96 @@ export function findMesh(decomp) {
     return {positions,indices,vertCount:cnt,triCount:tris.length,offset:off,size,method:`crystal-edges`,faceCount:faceCnt,edgeCount:edgeCnt,posOffset:posOff,stride:12};
   }
 
-  // 2. Solid2Model – raw verts stride 12/24/32/36 + IndexBuffer delta (new format)
+  // 2. Solid2Model – reverse search: find IndexBuffer first, then look back for verts
+  for(let s=0; s<len-16; s++){
+    const v=dv.getInt32(s,true);
+    if(v!==0x09057001 && v!==0x09057000) continue;
+    const isNew=(v===0x09057001);
+    let p=s+4;
+    if(p+8>len) continue;
+    const flags=dv.getInt32(p,true);
+    const count=dv.getInt32(p+4,true);
+    if(count<60||count>20000||count%3!==0) continue;
+    if(p+8+count*2>len) continue;
+    // decode indices to get max
+    let cur=0, maxI=0, ok=true;
+    const indices=new Uint32Array(count);
+    if(isNew){
+      for(let i=0;i<count;i++){
+        const delta=dv.getInt16(p+8+i*2,true);
+        cur+=delta;
+        if(cur<0||cur>15000){ ok=false; break; }
+        indices[i]=cur;
+        if(cur>maxI) maxI=cur;
+      }
+    } else {
+      for(let i=0;i<count;i++){
+        const idx=dv.getUint16(p+8+i*2,true);
+        if(idx>15000){ ok=false; break; }
+        indices[i]=idx;
+        if(idx>maxI) maxI=idx;
+      }
+    }
+    if(!ok) continue;
+    if(maxI<50) continue;
+    // Now look backwards up to 100k for a vertex buffer that could host maxI
+    const backStart=Math.max(0,s-100000);
+    for(let off=backStart; off<s-12; off+=4){
+      for(let stride of [12,24,32]){
+        const need = (maxI+1)*stride;
+        if(off+need > s) continue;
+        if(off+need+12 > len) continue;
+        // quick check first and last vert in range
+        const x0=dv.getFloat32(off,true), y0=dv.getFloat32(off+4,true), z0=dv.getFloat32(off+8,true);
+        const x1=dv.getFloat32(off+maxI*stride,true), y1=dv.getFloat32(off+maxI*stride+4,true), z1=dv.getFloat32(off+maxI*stride+8,true);
+        if(!Number.isFinite(x0)||!Number.isFinite(y0)||!Number.isFinite(z0)) continue;
+        if(!Number.isFinite(x1)||!Number.isFinite(y1)||!Number.isFinite(z1)) continue;
+        if(Math.abs(x0)>50||Math.abs(y0)>50||Math.abs(z0)>50) continue;
+        if(Math.abs(x1)>50||Math.abs(y1)>50||Math.abs(z1)>50) continue;
+        // bounding box quick
+        let minx=x0,miny=y0,minz=z0,maxx=x0,maxy=y0,maxz=z0;
+        let valid=true;
+        for(let i=0;i<=maxI;i+=Math.max(1,Math.floor((maxI+1)/20))){
+          const xx=dv.getFloat32(off+i*stride,true), yy=dv.getFloat32(off+i*stride+4,true), zz=dv.getFloat32(off+i*stride+8,true);
+          if(!Number.isFinite(xx)||!Number.isFinite(yy)||!Number.isFinite(zz)){ valid=false; break; }
+          if(Math.abs(xx)>50||Math.abs(yy)>50||Math.abs(zz)>50){ valid=false; break; }
+          if(xx<minx)minx=xx; if(yy<miny)miny=yy; if(zz<minz)minz=zz;
+          if(xx>maxx)maxx=xx; if(yy>maxy)maxy=yy; if(zz>maxz)maxz=zz;
+        }
+        if(!valid) continue;
+        const size=Math.max(maxx-minx,maxy-miny,maxz-minz);
+        if(size<0.15||size>15) continue;
+        // try both offsets for stride 24
+        const tryOffs=stride===24?[0,12]:[0];
+        let bestValid=0, bestOff=0;
+        for(const po of tryOffs){
+          let vcnt=0;
+          for(let i=0;i<Math.min(count-2,30); i+=3){
+            const a=indices[i], b=indices[i+1], c=indices[i+2];
+            if(a===b||b===c||a===c) continue;
+            const ar=triAreaOff(off,po,stride,a,b,c);
+            if(ar>1e-6&&ar<20) vcnt++;
+          }
+          if(vcnt>bestValid){ bestValid=vcnt; bestOff=po; }
+        }
+        if(bestValid<3) continue;
+        const cntVerts=maxI+1;
+        const pos=new Float32Array(cntVerts*3);
+        for(let i=0;i<cntVerts;i++){
+          pos[i*3]=dv.getFloat32(off+bestOff+i*stride,true);
+          pos[i*3+1]=dv.getFloat32(off+bestOff+i*stride+4,true);
+          pos[i*3+2]=dv.getFloat32(off+bestOff+i*stride+8,true);
+        }
+        console.log(`Solid2Model: ib @${s} cnt ${count} max ${maxI} verts ${cntVerts} @${off} stride ${stride} off ${bestOff} sz ${size.toFixed(2)} valid ${bestValid} flags ${flags}`);
+        return {positions:pos,indices:indices,vertCount:cntVerts,triCount:count/3,offset:off,size,method:`solid2model-${isNew?'delta-new':'direct-old'}`,posOffset:off+bestOff,stride,ibOffset:s};
+      }
+    }
+  }
+
+  // 3. Fallback raw candidates
   let candidates=[];
   for(let off=0;off<len-12;off+=4){
-    for(let stride of [12,24,32,36]){
+    for(let stride of [12,24]){
       if(off+stride>len) continue;
       const x0=dv.getFloat32(off,true),y0=dv.getFloat32(off+4,true),z0=dv.getFloat32(off+8,true);
       if(!Number.isFinite(x0)||!Number.isFinite(y0)||!Number.isFinite(z0)) continue;
@@ -121,117 +215,13 @@ export function findMesh(decomp) {
       if(size<0.15||size>15) continue;
       if(candidates.some(c=>c.offset===off&&c.stride===stride)) continue;
       candidates.push({offset:off,vertCount:cnt,size,posOffset:off,stride});
-      if(candidates.length>=24) break;
+      if(candidates.length>=20) break;
     }
-    if(candidates.length>=24) break;
+    if(candidates.length>=20) break;
   }
   candidates.sort((a,b)=>b.vertCount-a.vertCount);
-  console.log(`found ${candidates.length} raw candidates`);
-  for(let i=0;i<Math.min(4,candidates.length);i++) console.log(` cand ${i}: cnt ${candidates[i].vertCount} @${candidates[i].offset} stride ${candidates[i].stride} sz ${candidates[i].size.toFixed(2)}`);
-
-  for(const cand of candidates){
-    const cnt=cand.vertCount, posOff=cand.posOffset, stride=cand.stride;
-    const after=posOff+cnt*stride;
-    if(cnt<80) continue;
-    // dump first verts for big ones
-    if(cnt>800){
-      console.log(`  cand ${cnt}@${cand.offset} s${stride} v0 ${getPosStrided(posOff,stride,0).map(x=>x.toFixed(3)).join(',')} v1 ${getPosStrided(posOff,stride,1).map(x=>x.toFixed(3)).join(',')} v2 ${getPosStrided(posOff,stride,2).map(x=>x.toFixed(3)).join(',')}`);
-      if(stride===24){
-        const v0b=[dv.getFloat32(posOff+12,true),dv.getFloat32(posOff+16,true),dv.getFloat32(posOff+20,true)];
-        const v1b=[dv.getFloat32(posOff+36,true),dv.getFloat32(posOff+40,true),dv.getFloat32(posOff+44,true)];
-        console.log(`   v0+12 ${v0b.map(x=>x.toFixed(3)).join(',')} v1+12 ${v1b.map(x=>x.toFixed(3)).join(',')}`);
-      }
-    }
-    for(let s=after; s<Math.min(len-16, after+100000); s++){
-      const v=dv.getInt32(s,true);
-      if(v===0x09057001 || v===0x09057000){
-        const isNew=(v===0x09057001);
-        let p=s+4;
-        if(p+8>len) continue;
-        const flags=dv.getInt32(p,true);
-        const count=dv.getInt32(p+4,true);
-        if(count<60||count>cnt*6||count%3!==0) continue;
-        if(isNew){
-          if(p+8+count*2>len) continue;
-          let cur=0;
-          const indices=new Uint32Array(count);
-          let maxI=0, ok=true;
-          for(let i=0;i<count;i++){
-            const delta=dv.getInt16(p+8+i*2,true);
-            cur+=delta;
-            if(cur<0||cur>=cnt){ ok=false; break; }
-            indices[i]=cur;
-            if(cur>maxI) maxI=cur;
-          }
-          if(!ok) continue;
-          let valid=0, total=0;
-          for(let i=0;i<Math.min(count-2,30); i+=3){
-            const a=indices[i], b=indices[i+1], c=indices[i+2];
-            if(a===b||b===c||a===c) continue;
-            const ar=triAreaStrided(posOff,stride,a,b,c);
-            total++; if(ar>1e-6&&ar<20) valid++;
-          }
-          console.log(`    delta ib @${s} cnt ${count} max ${maxI} valid ${valid}/${total} flags ${flags}`);
-          if(valid===0) continue;
-          // try both pos at 0 and pos at +12 for stride 24, pick less degenerate
-          let bestPos=null, bestValid=-1, bestPosOff=posOff;
-          const tryOffsets=stride===24?[0,12]:[0];
-          for(const po of tryOffsets){
-            let valid=0; for(let i=0;i<Math.min(count-2,30); i+=3){ const a=indices[i], b=indices[i+1], c=indices[i+2]; if(a===b||b===c||a===c) continue; const pa=[dv.getFloat32(posOff+po+a*stride,true),dv.getFloat32(posOff+po+a*stride+4,true),dv.getFloat32(posOff+po+a*stride+8,true)]; const pb=[dv.getFloat32(posOff+po+b*stride,true),dv.getFloat32(posOff+po+b*stride+4,true),dv.getFloat32(posOff+po+b*stride+8,true)]; const pc=[dv.getFloat32(posOff+po+c*stride,true),dv.getFloat32(posOff+po+c*stride+4,true),dv.getFloat32(posOff+po+c*stride+8,true)]; const abx=pb[0]-pa[0],aby=pb[1]-pa[1],abz=pb[2]-pa[2], acx=pc[0]-pa[0],acy=pc[1]-pa[1],acz=pc[2]-pa[2]; const crx=aby*acz-abz*acy, cry=abz*acx-abx*acz, crz=abx*acy-aby*acx; const ar=Math.sqrt(crx*crx+cry*cry+crz*crz)*0.5; if(ar>1e-6&&ar<20) valid++; } if(valid>bestValid){ bestValid=valid; bestPosOff=posOff+po; }
-          }
-          const pos=new Float32Array(cnt*3);
-          for(let i=0;i<cnt;i++){ pos[i*3]=dv.getFloat32(bestPosOff+i*stride,true); pos[i*3+1]=dv.getFloat32(bestPosOff+i*stride+4,true); pos[i*3+2]=dv.getFloat32(bestPosOff+i*stride+8,true); }
-          console.log(`Raw ib delta: cnt ${cnt} @${cand.offset} stride ${stride} ib ${count} tris ${count/3} max ${maxI} bestOff ${bestPosOff-posOff} valid ${bestValid}`);
-          return {positions:pos,indices:indices,vertCount:cnt,triCount:count/3,offset:cand.offset,size:cand.size,method:`raw-ib-delta-new`,posOffset:bestPosOff,stride};
-        } else {
-          if(p+8+count*2>len) continue;
-          let ok=true, maxI=0;
-          for(let i=0;i<count;i++){ const idx=dv.getUint16(p+8+i*2,true); if(idx>=cnt){ ok=false; break; } if(idx>maxI) maxI=idx; }
-          if(!ok) continue;
-          let valid=0;
-          for(let i=0;i<Math.min(count-2,30); i+=3){
-            const a=dv.getUint16(p+8+i*2,true), b=dv.getUint16(p+8+(i+1)*2,true), c=dv.getUint16(p+8+(i+2)*2,true);
-            if(a===b||b===c||a===c) continue;
-            const ar=triAreaStrided(posOff,stride,a,b,c);
-            if(ar>1e-6&&ar<20) valid++;
-          }
-          if(valid===0) continue;
-          const pos=new Float32Array(cnt*3);
-          for(let i=0;i<cnt;i++){ const pp=getPosStrided(posOff,stride,i); pos[i*3]=pp[0]; pos[i*3+1]=pp[1]; pos[i*3+2]=pp[2]; }
-          const idx=new Uint32Array(count);
-          for(let i=0;i<count;i++) idx[i]=dv.getUint16(p+8+i*2,true);
-          console.log(`Raw ib direct: cnt ${cnt} @${cand.offset} ib ${count} tris ${count/3}`);
-          return {positions:pos,indices:idx,vertCount:cnt,triCount:count/3,offset:cand.offset,size:cand.size,method:`raw-ib-direct-old`,posOffset:posOff,stride};
-        }
-      }
-    }
-  }
-
-  // 3. Fallback ib search for Santa etc. (old heuristic u16/u32 with count prefix)
-  for(const cand of candidates){
-    if(cand.vertCount>2000) continue; // big ones already handled
-    const cnt=cand.vertCount, posOff=cand.posOffset;
-    const searchStart=posOff+cnt*12;
-    const searchEnd=Math.min(len-6, searchStart+250000);
-    for(let s=searchStart; s<searchEnd; s+=2){
-      if(s+2+60>len) continue;
-      const icnt=dv.getUint16(s,true);
-      if(icnt<60||icnt>cnt*4||icnt%3!==0) continue;
-      if(s+2+icnt*2>len) continue;
-      let ok=true; for(let i=0;i<Math.min(30,icnt);i++){ const idx=dv.getUint16(s+2+i*2,true); if(idx>=cnt){ ok=false; break; } }
-      if(!ok) continue;
-      const ia=dv.getUint16(s+2,true), ib=dv.getUint16(s+4,true), ic=dv.getUint16(s+6,true);
-      if(ia>=cnt||ib>=cnt||ic>=cnt) continue;
-      const ar=triArea12(posOff,ia,ib,ic);
-      if(ar<1e-6||ar>10) continue;
-      const positions=new Float32Array(cnt*3);
-      for(let i=0;i<cnt;i++){ positions[i*3]=dv.getFloat32(posOff+i*12,true); positions[i*3+1]=dv.getFloat32(posOff+i*12+4,true); positions[i*3+2]=dv.getFloat32(posOff+i*12+8,true); }
-      const indices=new Uint32Array(icnt);
-      for(let i=0;i<icnt;i++) indices[i]=dv.getUint16(s+2+i*2,true);
-      console.log(`Mesh via ib: cnt ${cnt} @${cand.offset} sz ${cand.size.toFixed(2)} ib ${icnt} @${s} tris ${icnt/3}`);
-      return {positions,indices,vertCount:cnt,triCount:icnt/3,offset:cand.offset,size:cand.size,method:`heuristic-ib-u16`,posOffset:posOff,ibOffset:s+2,stride:12};
-    }
-  }
+  console.log(`found ${candidates.length} raw candidates fallback`);
+  for(let i=0;i<Math.min(3,candidates.length);i++) console.log(` cand ${i}: cnt ${candidates[i].vertCount} @${candidates[i].offset} stride ${candidates[i].stride} sz ${candidates[i].size.toFixed(2)}`);
 
   if(candidates.length){
     let best=candidates[0];
