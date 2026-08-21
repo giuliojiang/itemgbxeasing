@@ -3,10 +3,14 @@ export function findMesh(decomp) {
   const len = decomp.length;
   console.log(`findMesh len ${len}`);
 
-  function tryFaces(posOff, cnt, stride, faceOff) {
+  function tryFaces(posOff, cnt, stride, faceOff, log) {
     if (faceOff + 4 > len) return null;
     const fc = dv.getInt32(faceOff, true);
-    if (fc < 10 || fc > 10000) return null;
+    if (fc < 10 || fc > 10000) {
+      if (log) console.log(`  faces @${faceOff} fc ${fc} reject`);
+      return null;
+    }
+    if (log) console.log(`  trying faces @${faceOff} fc ${fc}`);
     let p = faceOff + 4;
     for (let isNew of [false, true]) {
       let pp = p, ok = true, tris = [];
@@ -16,19 +20,18 @@ export function findMesh(decomp) {
         if (vc < 3 || vc > 12) { ok = false; break; }
         pp += isNew ? 1 : 4;
         if (pp + vc * (isNew ? 2 : 4) > len) { ok = false; break; }
-        let inds = [];
         for (let i = 0; i < vc; i++) {
           let idx = isNew ? dv.getUint16(pp, true) : dv.getInt32(pp, true);
           pp += isNew ? 2 : 4;
           if (idx < 0 || idx >= cnt) { ok = false; break; }
-          inds.push(idx);
         }
         if (!ok) break;
         if (pp + vc * 8 + 8 > len) { ok = false; break; }
         pp += vc * 8 + 8;
-        for (let i = 1; i < vc - 1; i++) tris.push([inds[0], inds[i], inds[i + 1]]);
+        for (let i = 1; i < vc - 1; i++) tris.push(1);
       }
       if (ok && tris.length >= 10) {
+        if (log) console.log(`    faces ${isNew?'new':'old'} first 20 ok tris~${tris.length}`);
         let full = [...tris];
         for (let f = 20; f < fc; f++) {
           if (pp + (isNew ? 1 : 4) > len) break;
@@ -36,21 +39,42 @@ export function findMesh(decomp) {
           if (vc < 3 || vc > 12) break;
           pp += isNew ? 1 : 4;
           if (pp + vc * (isNew ? 2 : 4) > len) break;
-          let inds = [];
+          let ok2 = true;
           for (let i = 0; i < vc; i++) {
             let idx = isNew ? dv.getUint16(pp, true) : dv.getInt32(pp, true);
             pp += isNew ? 2 : 4;
-            if (idx < 0 || idx >= cnt) break;
-            inds.push(idx);
+            if (idx < 0 || idx >= cnt) { ok2 = false; break; }
           }
-          if (inds.length !== vc) break;
+          if (!ok2) break;
           if (pp + vc * 8 + 8 > len) break;
           pp += vc * 8 + 8;
-          for (let i = 1; i < vc - 1; i++) full.push([inds[0], inds[i], inds[i + 1]]);
+          for (let i = 1; i < vc - 1; i++) full.push(1);
         }
-        if (full.length >= 20) return { tris: full, fc, mode: isNew ? 'new' : 'old' };
+        if (full.length >= 20) {
+          // Rebuild real tris for return
+          pp = p;
+          let realTris = [];
+          for (let f = 0; f < fc; f++) {
+            if (pp + (isNew ? 1 : 4) > len) break;
+            let vc = isNew ? dv.getUint8(pp) + 3 : dv.getInt32(pp, true);
+            if (vc < 3 || vc > 12) break;
+            pp += isNew ? 1 : 4;
+            if (pp + vc * (isNew ? 2 : 4) > len) break;
+            let inds = [];
+            for (let i = 0; i < vc; i++) {
+              let idx = isNew ? dv.getUint16(pp, true) : dv.getInt32(pp, true);
+              pp += isNew ? 2 : 4;
+              inds.push(idx);
+            }
+            if (pp + vc * 8 + 8 > len) break;
+            pp += vc * 8 + 8;
+            for (let i = 1; i < vc - 1; i++) realTris.push([inds[0], inds[i], inds[i + 1]]);
+          }
+          return { tris: realTris, fc, mode: isNew ? 'new' : 'old' };
+        }
       }
     }
+    if (log) console.log(`  faces @${faceOff} no mode worked`);
     return null;
   }
 
@@ -58,65 +82,6 @@ export function findMesh(decomp) {
     return [dv.getFloat32(off + i * stride, true), dv.getFloat32(off + i * stride + 4, true), dv.getFloat32(off + i * stride + 8, true)];
   }
 
-  // Count-prefixed crystal (old)
-  for (let off = 0; off < len - 4 - 60 * 12; off += 4) {
-    const cnt = dv.getInt32(off, true);
-    if (cnt < 60 || cnt > 8000) continue;
-    const posOff = off + 4;
-    if (posOff + cnt * 12 > len) continue;
-    let minx = 1e9, miny = 1e9, minz = 1e9, maxx = -1e9, maxy = -1e9, maxz = -1e9;
-    let ok = true;
-    for (let i = 0; i < Math.min(cnt, 20); i++) {
-      const x = dv.getFloat32(posOff + i * 12, true), y = dv.getFloat32(posOff + i * 12 + 4, true), z = dv.getFloat32(posOff + i * 12 + 8, true);
-      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) { ok = false; break; }
-      if (Math.abs(x) > 50 || Math.abs(y) > 50 || Math.abs(z) > 50) { ok = false; break; }
-      if (x < minx) minx = x; if (y < miny) miny = y; if (z < minz) minz = z;
-      if (x > maxx) maxx = x; if (y > maxy) maxy = y; if (z > maxz) maxz = z;
-    }
-    if (!ok) continue;
-    const size = Math.max(maxx - minx, maxy - miny, maxz - minz);
-    if (size < 0.15 || size > 15) continue;
-    const after = posOff + cnt * 12;
-    if (after + 4 > len) continue;
-    const ec = dv.getInt32(after, true);
-    if (ec >= 0 && ec <= cnt * 5) {
-      if (after + 4 + ec * 4 <= len) {
-        let eok = true;
-        for (let i = 0; i < Math.min(ec, 8); i++) {
-          const a = dv.getUint16(after + 4 + i * 4, true), b = dv.getUint16(after + 4 + i * 4 + 2, true);
-          if (a >= cnt || b >= cnt) { eok = false; break; }
-        }
-        if (eok) {
-          const adj = new Map(); for (let i = 0; i < cnt; i++) adj.set(i, new Set());
-          for (let i = 0; i < ec; i++) {
-            const a = dv.getUint16(after + 4 + i * 4, true), b = dv.getUint16(after + 4 + i * 4 + 2, true);
-            if (a < cnt && b < cnt) { adj.get(a).add(b); adj.get(b).add(a); }
-          }
-          let tris = [], seen = new Set();
-          for (let i = 0; i < cnt; i++) {
-            const nb = [...adj.get(i)];
-            for (let j = 0; j < nb.length; j++) for (let k = j + 1; k < nb.length; k++) {
-              const a = nb[j], b = nb[k];
-              if (adj.get(a).has(b)) {
-                const key = [i, a, b].sort((x, y) => x - y).join(",");
-                if (!seen.has(key)) { seen.add(key); tris.push([i, a, b]); }
-              }
-            }
-          }
-          if (tris.length >= 20) {
-            const pos = new Float32Array(cnt * 3);
-            for (let i = 0; i < cnt; i++) { pos[i * 3] = dv.getFloat32(posOff + i * 12, true); pos[i * 3 + 1] = dv.getFloat32(posOff + i * 12 + 4, true); pos[i * 3 + 2] = dv.getFloat32(posOff + i * 12 + 8, true); }
-            const idx = new Uint32Array(tris.length * 3);
-            for (let i = 0; i < tris.length; i++) { idx[i * 3] = tris[i][0]; idx[i * 3 + 1] = tris[i][1]; idx[i * 3 + 2] = tris[i][2]; }
-            console.log(`Crystal u16 edges: cnt ${cnt} @${off} tris ${tris.length}`);
-            return { positions: pos, indices: idx, vertCount: cnt, triCount: tris.length, offset: off, size, method: `crystal-edges-u16`, edgeCount: ec, posOffset: posOff, stride: 12 };
-          }
-        }
-      }
-    }
-  }
-
-  // Raw verts with stride detection
   let candidates = [];
   for (let off = 0; off < len - 12; off += 4) {
     for (let stride of [12, 24, 32, 36]) {
@@ -139,25 +104,35 @@ export function findMesh(decomp) {
       if (cnt < 60) continue;
       const size = Math.max(maxx - minx, maxy - miny, maxz - minz);
       if (size < 0.15 || size > 15) continue;
-      // dedup same offset
       if (candidates.some(c => c.offset === off && c.stride === stride)) continue;
-      candidates.push({ offset: off, vertCount: cnt, size, posOffset: off, stride });
-      if (candidates.length >= 16) break;
+      candidates.push({ offset: off, vertCount: cnt, size, posOffset: off, stride, minx, miny, minz, maxx, maxy, maxz });
+      if (candidates.length >= 20) break;
     }
-    if (candidates.length >= 16) break;
+    if (candidates.length >= 20) break;
+  }
+  candidates.sort((a, b) => b.vertCount - a.vertCount);
+  console.log(`found ${candidates.length} raw candidates`);
+  for (let ci = 0; ci < Math.min(candidates.length, 5); ci++) {
+    const c = candidates[ci];
+    console.log(` cand ${ci}: cnt ${c.vertCount} @${c.offset} stride ${c.stride} sz ${c.size.toFixed(2)}`);
   }
 
-  // Sort biggest first but keep stride 12 preferred for 3333 case logging
-  candidates.sort((a, b) => b.vertCount - a.vertCount);
   for (const cand of candidates) {
     const cnt = cand.vertCount, posOff = cand.posOffset, stride = cand.stride;
     const after = posOff + cnt * stride;
-    if (cand.vertCount === 3333 || cnt > 3000) console.log(`candidate cnt ${cnt} @${cand.offset} stride ${stride} sz ${cand.size.toFixed(2)} after ${after} hex ${(() => { let h=''; for(let i=0;i<16&&after+i<len;i++) h+=dv.getUint8(after+i).toString(16).padStart(2,'0')+' '; return h; })()}`);
-    // Try faces with search window
+    const isBig = cnt > 1000;
+    if (isBig) {
+      let hex = '', ints = '', u16s = '';
+      for (let i = 0; i < 32 && after + i < len; i++) hex += dv.getUint8(after + i).toString(16).padStart(2, '0') + ' ';
+      for (let i = 0; i < 4 && after + i * 4 + 4 <= len; i++) ints += dv.getInt32(after + i * 4, true) + ' ';
+      for (let i = 0; i < 8 && after + i * 2 + 2 <= len; i++) u16s += dv.getUint16(after + i * 2, true) + ' ';
+      console.log(`candidate cnt ${cnt} @${cand.offset} stride ${stride} sz ${cand.size.toFixed(2)} after ${after} hex ${hex} | int32 ${ints} | u16 ${u16s}`);
+    }
+    // faces
     for (let delta = 0; delta < 4096; delta += 4) {
       const fo = after + delta;
       if (fo + 4 > len) break;
-      const fr = tryFaces(posOff, cnt, stride, fo);
+      const fr = tryFaces(posOff, cnt, stride, fo, isBig && delta === 0);
       if (fr) {
         const pos = new Float32Array(cnt * 3);
         for (let i = 0; i < cnt; i++) { const p = getPos(posOff, stride, i); pos[i * 3] = p[0]; pos[i * 3 + 1] = p[1]; pos[i * 3 + 2] = p[2]; }
@@ -166,24 +141,27 @@ export function findMesh(decomp) {
         console.log(`Raw faces: cnt ${cnt} @${cand.offset} stride ${stride} delta ${delta} ${fr.mode} tris ${fr.tris.length}`);
         return { positions: pos, indices: idx, vertCount: cnt, triCount: fr.tris.length, offset: cand.offset, size: cand.size, method: `raw-faces-${fr.mode}`, posOffset: posOff, stride };
       }
+      if (isBig && delta === 0) console.log(`  no faces at after`);
     }
     const searchEnd = Math.min(len - 6, after + 300000);
-    // u16 with full validation + strip restart
+    let ibTries = 0, ibRejectBad = 0, ibRejectRange = 0;
     for (let s = after; s < searchEnd; s += 2) {
       if (s + 2 + 60 > len) continue;
       const ic = dv.getUint16(s, true);
       if (ic < 60 || ic > cnt * 6 || ic % 3 !== 0) continue;
       if (s + 2 + ic * 2 > len) continue;
-      let ok = true, maxIdx = 0, bad = 0, hasRestart = false;
+      ibTries++;
+      if (ibTries > 2000) break;
+      let ok = true, maxIdx = 0, bad = 0;
       for (let i = 0; i < ic; i++) {
         const idx = dv.getUint16(s + 2 + i * 2, true);
-        if (idx === 0xFFFF) { hasRestart = true; continue; }
-        if (idx >= cnt) { if (idx > cnt && idx < 65535) bad++; if (bad > ic * 0.1) { ok = false; break; } }
+        if (idx === 0xFFFF) continue;
+        if (idx >= cnt) { bad++; if (bad > ic * 0.15) { ok = false; break; } }
         else if (idx > maxIdx) maxIdx = idx;
       }
-      if (!ok) continue;
-      if (maxIdx < cnt * 0.2) continue;
-      // area check first valid tri
+      if (!ok) { ibRejectBad++; continue; }
+      if (maxIdx < cnt * 0.15) { ibRejectRange++; continue; }
+      // area
       let first = -1;
       for (let i = 0; i < ic - 2; i++) {
         const a = dv.getUint16(s + 2 + i * 2, true), b = dv.getUint16(s + 2 + (i + 1) * 2, true), c = dv.getUint16(s + 2 + (i + 2) * 2, true);
@@ -199,26 +177,28 @@ export function findMesh(decomp) {
       if (area < 1e-6 || area > 10) continue;
       const pos = new Float32Array(cnt * 3);
       for (let i = 0; i < cnt; i++) { const p = getPos(posOff, stride, i); pos[i * 3] = p[0]; pos[i * 3 + 1] = p[1]; pos[i * 3 + 2] = p[2]; }
-      // Build indices skipping restart and bad
       let out = [];
       for (let i = 0; i < ic; i++) {
         const idx = dv.getUint16(s + 2 + i * 2, true);
         if (idx === 0xFFFF || idx >= cnt) continue;
         out.push(idx);
       }
-      // trim to multiple of 3
       out = out.slice(0, Math.floor(out.length / 3) * 3);
       if (out.length < 60) continue;
       const idx = new Uint32Array(out);
-      console.log(`Raw ib u16: cnt ${cnt} @${cand.offset} stride ${stride} ib ${ic} valid ${out.length} tris ${out.length/3} max ${maxIdx}${hasRestart ? ' restart' : ''}`);
+      console.log(`Raw ib u16: cnt ${cnt} @${cand.offset} stride ${stride} ib ${ic} @${s} valid ${out.length} tris ${out.length/3} max ${maxIdx} bad ${bad}`);
       return { positions: pos, indices: idx, vertCount: cnt, triCount: out.length / 3, offset: cand.offset, size: cand.size, method: `raw-ib-u16`, posOffset: posOff, stride };
     }
+    if (isBig) console.log(`  u16 ib: tried ${ibTries} rejectBad ${ibRejectBad} rejectRange ${ibRejectRange}`);
     // u32
+    let ib32Tries = 0;
     for (let s = after; s < searchEnd; s += 4) {
       if (s + 4 + 60 > len) continue;
       const ic = dv.getInt32(s, true);
       if (ic < 60 || ic > cnt * 6 || ic % 3 !== 0 || ic > 100000) continue;
       if (s + 4 + ic * 4 > len) continue;
+      ib32Tries++;
+      if (ib32Tries > 2000) break;
       let ok = true, maxIdx = 0;
       for (let i = 0; i < ic; i++) {
         const idx = dv.getInt32(s + 4 + i * 4, true);
@@ -226,7 +206,7 @@ export function findMesh(decomp) {
         if (idx > maxIdx) maxIdx = idx;
       }
       if (!ok) continue;
-      if (maxIdx < cnt * 0.2) continue;
+      if (maxIdx < cnt * 0.15) continue;
       const ia = dv.getInt32(s + 4, true), ib = dv.getInt32(s + 8, true), ic0 = dv.getInt32(s + 12, true);
       const pa = getPos(posOff, stride, ia), pb = getPos(posOff, stride, ib), pc = getPos(posOff, stride, ic0);
       const abx = pb[0] - pa[0], aby = pb[1] - pa[1], abz = pb[2] - pa[2], acx = pc[0] - pa[0], acy = pc[1] - pa[1], acz = pc[2] - pa[2];
@@ -237,9 +217,10 @@ export function findMesh(decomp) {
       for (let i = 0; i < cnt; i++) { const p = getPos(posOff, stride, i); pos[i * 3] = p[0]; pos[i * 3 + 1] = p[1]; pos[i * 3 + 2] = p[2]; }
       const idx = new Uint32Array(ic);
       for (let i = 0; i < ic; i++) idx[i] = dv.getInt32(s + 4 + i * 4, true);
-      console.log(`Raw ib u32: cnt ${cnt} @${cand.offset} stride ${stride} ib ${ic} tris ${ic/3} max ${maxIdx}`);
+      console.log(`Raw ib u32: cnt ${cnt} @${cand.offset} stride ${stride} ib ${ic} @${s} tris ${ic/3} max ${maxIdx}`);
       return { positions: pos, indices: idx, vertCount: cnt, triCount: ic / 3, offset: cand.offset, size: cand.size, method: `raw-ib-u32`, posOffset: posOff, stride };
     }
+    if (isBig) console.log(`  u32 ib tried ${ib32Tries}`);
   }
 
   if (candidates.length) {
