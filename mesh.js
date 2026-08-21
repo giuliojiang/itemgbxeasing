@@ -11,7 +11,7 @@ export function findMesh(decomp){
     const crx=aby*acz-abz*acy, cry=abz*acx-abx*acz, crz=abx*acy-aby*acx;
     return Math.sqrt(crx*crx+cry*cry+crz*crz)*0.5;
   }
-  // 1. Crystal (old)
+  // 1. Crystal (old) – 2856 etc
   for(let off=0;off<len-4-60*12;off+=4){
     const cnt=dv.getInt32(off,true);
     if(cnt<80||cnt>6000) continue;
@@ -51,7 +51,39 @@ export function findMesh(decomp){
     return {positions,indices,vertCount:cnt,triCount:tris.length,offset:off,size,method:`crystal-edges`,posOffset:posOff,stride:12};
   }
 
-  // 2. Solid2Model – find all IndexBuffers
+  // Build raw float candidates (used by both Solid2Model and legacy)
+  let candidates=[];
+  for(let off=0;off<len-12;off+=4){
+    for(let stride of [12,24]){
+      if(off+stride>len) continue;
+      const x0=dv.getFloat32(off,true),y0=dv.getFloat32(off+4,true),z0=dv.getFloat32(off+8,true);
+      if(!Number.isFinite(x0)||!Number.isFinite(y0)||!Number.isFinite(z0)) continue;
+      if(Math.abs(x0)>50||Math.abs(y0)>50||Math.abs(z0)>50) continue;
+      let minx=x0,miny=y0,minz=z0,maxx=x0,maxy=y0,maxz=z0,cnt=1,o=off+stride,bad=false;
+      while(o+12<=len&&cnt<8000){
+        const xx=dv.getFloat32(o,true),yy=dv.getFloat32(o+4,true),zz=dv.getFloat32(o+8,true);
+        if(!Number.isFinite(xx)||!Number.isFinite(yy)||!Number.isFinite(zz)){bad=true;break;}
+        if(Math.abs(xx)>50||Math.abs(yy)>50||Math.abs(zz)>50) break;
+        if(xx<minx)minx=xx; if(yy<miny)miny=yy; if(zz<minz)minz=zz;
+        if(xx>maxx)maxx=xx; if(yy>maxy)maxy=yy; if(zz>maxz)maxz=zz;
+        if(Math.max(maxx-minx,maxy-miny,maxz-minz)>15) break;
+        cnt++; o+=stride;
+      }
+      if(bad) continue;
+      if(cnt<80) continue;
+      const size=Math.max(maxx-minx,maxy-miny,maxz-minz);
+      if(size<0.2||size>15) continue;
+      if(candidates.some(c=>c.offset===off&&c.stride===stride)) continue;
+      candidates.push({offset:off,vertCount:cnt,size,posOffset:off,stride});
+      if(candidates.length>=40) break;
+    }
+    if(candidates.length>=40) break;
+  }
+  candidates.sort((a,b)=>b.vertCount-a.vertCount);
+  console.log(`found ${candidates.length} raw candidates`);
+  for(let i=0;i<Math.min(5,candidates.length);i++) console.log(` cand ${i}: cnt ${candidates[i].vertCount} @${candidates[i].offset} stride ${candidates[i].stride} sz ${candidates[i].size.toFixed(2)}`);
+
+  // 2. Solid2Model – IndexBuffer 0x09057001 / 000
   let ibs=[];
   for(let s=0;s<len-16;s++){
     const v=dv.getInt32(s,true);
@@ -70,58 +102,22 @@ export function findMesh(decomp){
     }
     if(!ok||maxI<20) continue;
     ibs.push({offset:s,count,maxI,indices,isNew});
-    if(ibs.length>=8) break;
+    if(ibs.length>=10) break;
   }
   console.log(`found ${ibs.length} IndexBuffers`);
   for(let ib of ibs) console.log(` ib @${ib.offset} cnt ${ib.count} max ${ib.maxI} ${ib.isNew?'delta':'direct'}`);
 
-  // Build float-run candidates for fallback
-  let candidates=[];
-  for(let off=0;off<len-12;off+=4){
-    for(let stride of [12,24]){
-      if(off+stride>len) continue;
-      const x0=dv.getFloat32(off,true),y0=dv.getFloat32(off+4,true),z0=dv.getFloat32(off+8,true);
-      if(!Number.isFinite(x0)||!Number.isFinite(y0)||!Number.isFinite(z0)) continue;
-      if(Math.abs(x0)>50||Math.abs(y0)>50||Math.abs(z0)>50) continue;
-      let minx=x0,miny=y0,minz=z0,maxx=x0,maxy=y0,maxz=z0,cnt=1,o=off+stride, bad=false;
-      while(o+12<=len&&cnt<8000){
-        const xx=dv.getFloat32(o,true),yy=dv.getFloat32(o+4,true),zz=dv.getFloat32(o+8,true);
-        if(!Number.isFinite(xx)||!Number.isFinite(yy)||!Number.isFinite(zz)){bad=true;break;}
-        if(Math.abs(xx)>50||Math.abs(yy)>50||Math.abs(zz)>50) break;
-        if(xx<minx)minx=xx; if(yy<miny)miny=yy; if(zz<minz)minz=zz;
-        if(xx>maxx)maxx=xx; if(yy>maxy)maxy=yy; if(zz>maxz)maxz=zz;
-        if(Math.max(maxx-minx,maxy-miny,maxz-minz)>15) break;
-        cnt++; o+=stride;
-      }
-      if(bad) continue;
-      if(cnt<80) continue;
-      const size=Math.max(maxx-minx,maxy-miny,maxz-minz);
-      if(size<0.2||size>15) continue;
-      if(candidates.some(c=>c.offset===off&&c.stride===stride)) continue;
-      candidates.push({offset:off,vertCount:cnt,size,posOffset:off,stride});
-      if(candidates.length>=32) break;
-    }
-    if(candidates.length>=32) break;
-  }
-  candidates.sort((a,b)=>b.vertCount-a.vertCount);
-  console.log(`found ${candidates.length} raw candidates`);
-  for(let i=0;i<Math.min(5,candidates.length);i++) console.log(` cand ${i}: cnt ${candidates[i].vertCount} @${candidates[i].offset} stride ${candidates[i].stride} sz ${candidates[i].size.toFixed(2)}`);
-
-  // Try pairings – best score wins
-  let best=null, bestScore=-1;
+  let best=null,bestScore=-1;
   for(let ib of ibs){
-    // Try direct offset = ib.offset - (maxI+1)*stride
     for(let stride of [12,24]){
       for(let gap of [0,4,8,12,16,24,32,48,64,84,96,128]){
         const vc=ib.maxI+1;
         const off=ib.offset - vc*stride - gap;
         if(off<0||off+vc*stride>len) continue;
-        // quick finite check first and last
         const x0=dv.getFloat32(off,true), y0=dv.getFloat32(off+4,true), z0=dv.getFloat32(off+8,true);
         const x1=dv.getFloat32(off+(vc-1)*stride,true), y1=dv.getFloat32(off+(vc-1)*stride+4,true), z1=dv.getFloat32(off+(vc-1)*stride+8,true);
         if(!Number.isFinite(x0)||!Number.isFinite(y0)||!Number.isFinite(z0)||!Number.isFinite(x1)||!Number.isFinite(y1)||!Number.isFinite(z1)) continue;
         if(Math.abs(x0)>50||Math.abs(y0)>50||Math.abs(z0)>50||Math.abs(x1)>50||Math.abs(y1)>50||Math.abs(z1)>50) continue;
-        // full finite scan (sample)
         let ok=true, minx=x0,miny=y0,minz=z0,maxx=x0,maxy=y0,maxz=z0;
         for(let i=0;i<vc;i+=Math.max(1,Math.floor(vc/30))){
           const xx=dv.getFloat32(off+i*stride,true), yy=dv.getFloat32(off+i*stride+4,true), zz=dv.getFloat32(off+i*stride+8,true);
@@ -133,21 +129,16 @@ export function findMesh(decomp){
         if(!ok) continue;
         const size=Math.max(maxx-minx,maxy-miny,maxz-minz);
         if(size<0.15||size>15) continue;
-        // try both pos offsets for stride 24
         const tryOffs=stride===24?[0,12]:[0];
         for(let po of tryOffs){
           let valid=0;
           for(let i=0;i<Math.min(ib.count-2,60);i+=3){const a=ib.indices[i],b=ib.indices[i+1],c=ib.indices[i+2]; if(a>=vc||b>=vc||c>=vc) continue; if(a===b||b===c||a===c) continue; const ar=triArea(off,stride,a,b,c,po); if(ar>1e-6&&ar<20) valid++;}
           if(valid<5) continue;
-          const score=valid*1000 - gap - (vc<500?0:0); // prefer low gap, high valid
-          if(score>bestScore){
-            bestScore=score;
-            best={ib,off,vc,size,stride,po,valid,gap};
-          }
+          const score=valid*1000 - gap;
+          if(score>bestScore){bestScore=score; best={ib,off,vc,size,stride,po,valid,gap};}
         }
       }
     }
-    // Also try pairing with float-run candidates
     for(let cand of candidates){
       if(cand.vertCount<=ib.maxI) continue;
       if(cand.offset+cand.vertCount*cand.stride>ib.offset+2000) continue;
@@ -159,10 +150,7 @@ export function findMesh(decomp){
         if(valid<4) continue;
         const gap=ib.offset-(cand.offset+cand.vertCount*cand.stride);
         const score=valid*800 - gap*0.1 - (cand.vertCount/(ib.maxI+1))*10;
-        if(score>bestScore){
-          bestScore=score;
-          best={ib,off:cand.posOffset,vc:cand.vertCount,size:cand.size,stride:cand.stride,po,valid,gap,cand:true};
-        }
+        if(score>bestScore){bestScore=score; best={ib,off:cand.posOffset,vc:cand.vertCount,size:cand.size,stride:cand.stride,po,valid,gap,cand:true};}
       }
     }
   }
@@ -175,6 +163,63 @@ export function findMesh(decomp){
     if(!hasNaN){
       console.log(`Solid2Model BEST: ib @${ib.offset} cnt ${ib.count} max ${ib.maxI} with verts ${cntVerts} @${best.off} stride ${best.stride} off ${best.po} sz ${best.size.toFixed(2)} valid ${best.valid} gap ${best.gap} ${best.cand?'cand':'direct'}`);
       return {positions:pos,indices:ib.indices,vertCount:cntVerts,triCount:ib.count/3,offset:best.off,size:best.size,method:`solid2model-best`,posOffset:best.off+best.po,stride:best.stride,ibOffset:ib.offset};
+    }
+  }
+
+  // 3. Legacy old files – u16 ib with count prefix (Santa etc) and brute-force without prefix
+  // Try count-prefixed u16
+  for(let cand of candidates){
+    for(let s=0;s<Math.min(len-6,200000);s+=2){
+      if(s+4>len) continue;
+      const cnt=dv.getUint16(s,true);
+      if(cnt<30||cnt>10000||cnt%3!==0) continue;
+      if(s+4+cnt*2>len) continue;
+      const off=s+4;
+      let maxI=0,ok=true;
+      for(let i=0;i<cnt;i++){const idx=dv.getUint16(off+i*2,true); if(idx>=cand.vertCount){ok=false;break;} if(idx>maxI) maxI=idx;}
+      if(!ok) continue;
+      let valid=0; for(let i=0;i<Math.min(cnt-2,30);i+=3){const a=dv.getUint16(off+i*2,true),b=dv.getUint16(off+i*2+2,true),c=dv.getUint16(off+i*2+4,true); if(a===b||b===c||a===c) continue; const ar=triArea(cand.posOffset,cand.stride,a,b,c,0); if(ar>1e-6&&ar<10) valid++;}
+      if(valid<4) continue;
+      console.log(`Legacy u16 cnt ${cnt} @${s} max ${maxI} verts ${cand.vertCount} @${cand.offset} valid ${valid}`);
+      const pos=new Float32Array(cand.vertCount*3);
+      for(let i=0;i<cand.vertCount;i++){pos[i*3]=dv.getFloat32(cand.posOffset+i*cand.stride,true); pos[i*3+1]=dv.getFloat32(cand.posOffset+i*cand.stride+4,true); pos[i*3+2]=dv.getFloat32(cand.posOffset+i*cand.stride+8,true);}
+      const indices=new Uint32Array(cnt); for(let i=0;i<cnt;i++) indices[i]=dv.getUint16(off+i*2,true);
+      return {positions:pos,indices,vertCount:cand.vertCount,triCount:cnt/3,offset:cand.offset,size:cand.size,method:`legacy-u16-count`,posOffset:cand.posOffset,stride:cand.stride};
+    }
+    if(candidates.indexOf(cand)>=3) break; // only try first few cands for speed
+  }
+  // Brute-force u16 run without count
+  for(let cand of candidates){
+    for(let s=0;s<len-6;s+=2){
+      let run=0,maxI=0,ok=true, firstA=0;
+      let start=s;
+      for(let i=0;i<5000;i++){
+        if(start+i*2+1>=len) break;
+        const idx=dv.getUint16(start+i*2,true);
+        if(idx>=cand.vertCount){ if(run>=30) break; else {run=0; start+=2; continue; } }
+        if(idx>maxI) maxI=idx;
+        run++;
+        if(run===1) firstA=idx;
+        if(run>=60){
+          // check a few tris
+          let valid=0;
+          for(let j=0;j<Math.min(run-2,30);j+=3){
+            const a=dv.getUint16(start+j*2,true),b=dv.getUint16(start+j*2+2,true),c=dv.getUint16(start+j*2+4,true);
+            if(a===b||b===c||a===c) continue;
+            const ar=triArea(cand.posOffset,cand.stride,a,b,c,0); if(ar>1e-6&&ar<10) valid++;
+          }
+          if(valid>=5){
+            const cnt=run - (run%3);
+            console.log(`Legacy brute u16 run cnt ${cnt} @${start} max ${maxI} verts ${cand.vertCount} @${cand.offset} valid ${valid}`);
+            const pos=new Float32Array(cand.vertCount*3);
+            for(let k=0;k<cand.vertCount;k++){pos[k*3]=dv.getFloat32(cand.posOffset+k*cand.stride,true); pos[k*3+1]=dv.getFloat32(cand.posOffset+k*cand.stride+4,true); pos[k*3+2]=dv.getFloat32(cand.posOffset+k*cand.stride+8,true);}
+            const indices=new Uint32Array(cnt); for(let k=0;k<cnt;k++) indices[k]=dv.getUint16(start+k*2,true);
+            return {positions:pos,indices,vertCount:cand.vertCount,triCount:cnt/3,offset:cand.offset,size:cand.size,method:`legacy-brute-u16`,posOffset:cand.posOffset,stride:cand.stride};
+          }
+        }
+        if(run>5000) break;
+      }
+      if(candidates.indexOf(cand)>=2) break;
     }
   }
 
