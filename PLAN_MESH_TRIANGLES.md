@@ -1,71 +1,168 @@
-# Plan – Point cloud shows, but no solid mesh (triangles missing)
+# Plan – Proper triangles (v2) – no more point cloud
 
-## Current state (big progress)
-- Camera centering works – user sees something immediately without dragging
-- Mesh loader now returns points (3813 verts Balloons, 874 Santa) instead of mangled needle – screenshot shows scattered white dots forming rough shape of item, not solid
-- No console errors, proxy fallback works
-- Still showing as Points, not Mesh with triangles
+## User feedback
+- Camera centering works, big progress
+- Mesh now shows as point cloud (white dots), not solid mesh
+- Wants proper solid mesh, not fallback/proxy
+- Asks to search web if needed, investigate deeper
 
-## Why triangles missing
-Current `parseMesh`:
-- Finds vert block by scanning for float triples with size 0.15-12m, rejects many zeros
-- Then searches for ib within 120k after verts, requiring:
-  - count >=60, count >= vertCount*0.4, count %3==0
-  - indices < vertCount and maxIdx >= vertCount*0.3
-  - first 3 tris have area 1e-5..20
+## What we found (deep dive)
 
-For Balloons 3813 verts, ib should be ~6000-10000 indices (2000-3000 tris). Our search didn't find it within 120k after verts, or found but rejected because area check failed (maybe stride wrong so triangle area huge/tiny).
+### Real structure is NOT raw vert+ib scan
+Heuristic scanning for float triples + index buffer is wrong for old Item.Gbx. It finds random float blocks (lightmap, physics) and gives point clouds.
 
-For Santa 874 verts, similar.
+**Actual mesh for old Items is `CPlugCrystal 0x09003000`:**
 
-Old heuristic found ib 4800 @178420 for 9526 verts – that ib was 4800 indices = 1600 tris, plausible for 9526 verts (ratio 0.5). But we now reject 9526 verts because size 12.99m was borderline and zeroCount high.
+From GBX.NET `CPlugCrystal.cs` + `GbxReader.cs`:
 
-Point cloud is better than needle, but not what user expects – they want solid mesh.
+```
+Crystal:
+  Version int32 ( >=21 )
+  if Version>=13: U01 int32=4, VisualLevels array
+  if Version>=23: AnchorInfos array
+  if Version>=22: Groups (Parts) array
+  if Version>=25:
+    if Version<29: IsEmbedded bool x2
+    IsEmbedded bool (as byte if >=34)
+    if Version>=33: U02,U03 int32
+  if !IsEmbedded → not supported (external .Gbx)
+  Positions = ReadArray<Vec3>   // count int32 + count*12 bytes (3 float32 LE)
+  edgeCount int32
+  Edges = HasFacedEdges ? ReadArray<Int2>(edgeCount) : ReadArrayOptimizedInt2()
+  faceCount int32
+  if Version>=37:
+    texCoords = ReadArray<Vec2>
+    texCoordIndices = ReadArrayOptimizedInt()
+  Faces[faceCount]:
+    vertCount = Version>=35 ? ReadByte()+3 : ReadInt32()
+    inds = Version>=34 ? ReadArrayOptimizedInt(vertCount, Positions.Length) : ReadArray<int32>(vertCount)
+    // inds are indices into Positions – THIS IS THE TRIANGLE DATA
+    for each vert in face:
+      if Version<27: uvCount = min(ReadInt32(), vertCount) … reads Vec2 per vert + Vec3 normal
+      else if Version<37: for each vert: TexCoord=ReadVec2()
+      else: TexCoord=texCoords[texCoordIndices[faceVertexIndex++]]
+    materialIndex int32 (or optimized)
+    groupIndex int32 (optimized if >=33)
+    // then per face skips: ReadInt32() etc depending on Version
+  U04 int32 etc…
+```
 
-## What real mesh looks like in GBX
-From GBX.NET:
-- `CPlugCrystal 0x09003000` contains layers, each layer has geometry
-- `CPlugSolid2Model 0x090BB000` has `ShadedGeom` with VisualIndex/MaterialIndex and LodMask
-- Vertices likely in `CPlugVertexStream` or `CPlugSurface` with explicit `Positions`, `Normals`, `TexCoords`, `Indices`
-- Item.Gbx old format stores meshes as `CPlugStaticObjectModel` which references `CPlugSolid2Model`
+**Faces are polygons**, not necessarily triangles. `vertCount` is 3+ (tri, quad, n-gon). `inds` are indices into `Positions`. That’s the mesh.
 
-We haven't parsed those NodeRefs – we just scan raw floats. That's why we get point clouds (positions only) but miss indices which are stored elsewhere (maybe compressed or in different chunk).
+ObjExporter does:
+```csharp
+foreach face in Crystal.Faces
+  for each vertex in face.Vertices
+    pos = Positions[vertex.Index]
+    uv = vertex.TexCoord
+  write f pos/uv
+```
+So to get solid mesh, we need to triangulate polygons (fan triangulation).
 
-## Investigation needed
+### Why we got point clouds
+- Our 3813 verts @46244 size 0.95m is actually `Positions` array! 3813 Vec3 = 11439 floats = 45756 bytes. That matches.
+- No ib found because ib doesn’t exist as flat buffer – faces store their own index arrays with variable length and optimized ints.
+- Point cloud rendering of Positions alone looks like scattered dots forming rough shape (screenshot) – that’s expected.
 
-1. Dump decomp around vert block for Balloons 3813 @46244 – what’s at 46244+3813*12 = 92000? Is there an ib there? Log first 100 uint32 after verts, see if any look like indices (0..3812)
-2. Try different strides: 12 is pos-only, but real vert may be 24 (pos+normal) or 32 (pos+normal+uv). Our 3813 verts at stride 12 size 0.95m – try stride 24 at same off, see if vertCount halves but size similar and ib appears
-3. Look for `CPlugVertexStream` header: search for classID 0x0900... that contains vertex count. Grep decomp for `0x090...` near vert blocks
-4. Check if indices are 16-bit not 32-bit for these meshes – our u16 search may be too strict (requires count>=60 and >=vert*0.4, but 3813*0.4=1525, so 60 is okay, but we also require maxIdx>=vert*0.3 which should pass)
+### Critical discovery: ReadArrayOptimizedInt is NOT varint
+From `GbxReader.cs:1363`:
+```csharp
+public int ReadOptimizedInt(int determineFrom) => (uint)determineFrom switch
+{
+    > ushort.MaxValue => ReadInt32(),
+    > byte.MaxValue => ReadUInt16(),
+    _ => ReadByte()
+};
+public int[] ReadArrayOptimizedInt(int length, int? determineFrom = null)
+{
+    return (uint)determineFrom.GetValueOrDefault(length) switch
+    {
+        >= ushort.MaxValue => ReadArray<int>(length),
+        >= byte.MaxValue => Array.ConvertAll(ReadArray<ushort>(length), x => (int)x),
+        _ => Array.ConvertAll(ReadBytes(length), x => (int)x)
+    };
+}
+```
+So if `Positions.Length` = 3813 ( >255, <65535 ), indices are stored as **uint16** (2 bytes each). If >65535, int32. If <256, byte.
 
-## Fix plan
+That explains why our uint32 ib search failed – we were looking for int32 count + int32 indices, but real is uint16.
 
-### Fix A – Loosen ib search, keep validation but allow smaller ib
-- Allow ibCount >= 60 even if < vertCount*0.4, as long as triangle count >=20 and area plausible
-- Search further: up to 500k after verts, not just 120k – ib may be far from verts (different chunk)
-- Try both u16 and u32, and also try direct tri array without count prefix (some meshes store raw tris)
+### For newer Items (CPlugSolid2Model)
+- Uses `CPlugVisualIndexedTriangles 0x0901E000` → inherits `CPlugVisualIndexed 0x0906A000` → `CPlugVisual3D 0x0902C000`
+- Visual has `VertexStreams[]` and `Vertices[]` and `IndexBuffer` (`CPlugIndexBuffer 0x09057000`)
+- `CPlugIndexBuffer` chunk 0x000: flags + count + uint16 indices, or 0x001: delta-encoded int16
+- Positions in `VertexStreams[0].Positions` or `Vertices[].Position`
 
-### Fix B – Try multiple vert interpretations at same offset
-- For each plausible vert off, try stride 12,24,32,36 – for each, try to find ib. Keep the combo that gives most valid tris with plausible area and box size 0.2-5m
-- For Balloons, 3813 verts stride12 size 0.95m no ib – try same off with stride 24 → 1906 verts, size maybe 0.95m, ib maybe 3000 indices – could be real mesh
+But our 3 test files are old, so they are Crystal.
 
-### Fix C – If still no ib, synthesize ib via simple triangulation (temporary)
-- If we have points that look like a closed shape but no ib, we can run a quick Delaunay or just show as Points with bigger size for now, but note in UI “points only – triangles not found”
-- Better: fallback to proxy if points look like random noise (size <0.2 or >5, or zeroCount high)
+## Plan – Implement proper Crystal parser in JS
 
-### Fix D – Real fix (stretch, not required for v1)
-- Parse `CPlugSolid2Model` properly: read its `ShadedGeom` array, get `VisualIndex` → `CPlugVisual` → `CPlugVertexStream` → exact Positions/Indices offsets. That would give us perfect mesh, no heuristic.
-- For now, keep heuristic but make it return solid Mesh when possible, Points otherwise, Proxy otherwise – never needle.
+### Step 1 – Find Crystal in decomp
+Crystal is inside `CGameItemModel` → `CPlugCrystal` node. In decomp, search for Crystal version pattern.
+Simpler: scan decomp for plausible Crystal header:
+- Look for `Version` 22-38 (int32) followed by small U01=4, then array counts, then Positions count that makes sense.
+- Or find `CPlugCrystal` classID `0x09003000`? No, Crystal is not a NodeRef with classID in old format – it’s embedded struct.
+- Better: use GBX.NET logic: after reading header, walk NodeRefs to find `CPlugCrystal`. In JS we can brute-force: look for Positions array signature: count int32 (100-10000) followed by that many Vec3 where all coords finite and box size 0.2-20m, then edgeCount small, then faceCount (10-5000).
+
+We already have a near-correct Positions block at 46244 for Balloons – that IS the Positions array, including its count prefix! Our current scan starts at 46244 but we treat 46244 as first float, but actually 46244-4 is count. Check: if we read int32 at 46240, what is it?
+
+**Todo:** dump Balloons decomp at 46240: `count`, first 3 Positions, edgeCount, faceCount, first face vertCount and first 3 inds – to confirm Crystal layout. Use Node script to parse.
+
+### Step 2 – Parse Crystal fully (JS)
+Write `parseCrystal(decomp, posOff)` that:
+- Reads `count = dv.getInt32(off-4, true)` (Positions length)
+- Validates 50 < count < 20000
+- Positions = count Vec3 from off
+- edgeCount = dv.getInt32(off+count*12, true)
+- Edges: if Version<35, edges are Int2 = 2 int32 each (8 bytes), else optimized. For old versions, skip `edgeCount*8`
+- faceCount = next int32
+- Then loop faceCount faces parsing vertCount, inds
+  - vertCount = dv.getInt32(...) (or byte+3 if Version>=35 – need to know Version, we can try both)
+  - inds: if Positions.Length >=65535, 4 bytes each, else if >=256, 2 bytes each (uint16), else 1 byte
+- For each face, also need to skip UVs: if Version<37, each vert has Vec2 (8 bytes). So skip `vertCount*8`
+- Then materialIndex (4 bytes) and groupIndex (4 bytes or optimized)
+- Then extra skips per Version
+
+**Key:** we need Crystal Version. We can try to guess Version by trying to parse from a plausible Version location before Positions. Or we can brute-force Version 30-36 and see which gives valid faceCount and vertCounts 3-10.
+
+Simpler v1: assume Version 30-33 (common for old items). Then vertCount = int32, inds = uint16, UVs = Vec2 per vert, material+group = int32 each.
+
+### Step 3 – Triangulate
+Once we have Faces with `indices[]` (3+ per face), triangulate:
+- For face with 3 verts: 1 tri (0,1,2)
+- 4 verts: 2 tris (0,1,2) (0,2,3)
+- n verts: fan from 0 (0,i,i+1) for i=1..n-2
+
+Build Float32 positions (from Positions array) and Uint32 indices (triangulated). Keep Positions as is, don’t deduplicate.
+
+### Step 4 – Render as Mesh
+- `geometry.setAttribute('position', new BufferAttribute(positions,3))`
+- `geometry.setIndex(triIndices)` – use Uint32 if >65535 else Uint16
+- `computeVertexNormals()` for smooth shading
+- `DoubleSide` material, grey, `MeshStandardMaterial`
+
+### Step 5 – Integrate
+- New `parseCrystalMesh(decomp)` tries to find Crystal, returns `{positions, indices, reason}` or null
+- `parseMesh` tries Crystal first, then falls back to old heuristic (but old heuristic should be removed – it gives point clouds)
+- If Crystal fails, show proxy with reason, not points
+
+## Investigation todo (before coding)
+
+1. Dump Balloons decomp at 46240: count, first 3 Positions, edgeCount, faceCount, first face vertCount and first 3 inds – to confirm Crystal layout
+2. Write quick Node test `test_crystal.mjs` that tries Version 30-35 and parses 10 faces, logs their vertCounts and indices, checks if indices < Positions.Length
+3. If that works, triangulate and compute total tris – should be ~2-4k for Balloons
 
 ## Acceptance
-- Balloons: solid grey mesh, 4 balloons recognizable, not just dots, centered, 1-2k tris
-- Duck: solid duck mesh, ~1k verts, 1-2k tris, or if truly points-only item, show as Points with note
-- Santa: solid Santa mesh, sled visible
-- If mesh still not found, bright proxy icosahedron (not points) so user knows it’s fallback
-- No mangled needles, no blank, no point cloud that looks like noise
 
-## What we won’t do yet
-- Full material/texture support – keep grey double-sided standard
-- LOD selection – just pick largest plausible mesh
-- Physics mesh – ignore
+- Balloons: solid mesh, 4 balloons + strings, ~1-3k tris, not dots, centered, smooth shading
+- Santa: solid Santa + sled, ~1k tris
+- Duck: solid duck
+- No point cloud unless item truly has no faces (unlikely)
+- No proxy unless parse fails – then proxy with reason logged
+- Works client-side, no worker, no WASM
 
+## What we won’t do
+
+- Materials/textures – grey only
+- Lightmap UVs – ignore for v1
+- Newer Solid2Model parsing – only if old Crystal works, then add later
