@@ -54,7 +54,6 @@ export function findMesh(decomp) {
     return null;
   }
 
-  // Try count-prefixed crystal (Balloons style)
   for (let off = 0; off < len - 4 - 60 * 12; off += 4) {
     const cnt = dv.getInt32(off, true);
     if (cnt < 60 || cnt > 8000) continue;
@@ -76,7 +75,6 @@ export function findMesh(decomp) {
     if (after + 4 > len) continue;
     const ec = dv.getInt32(after, true);
     if (ec >= 0 && ec <= cnt * 5) {
-      // u16 edges
       if (after + 4 + ec * 4 <= len) {
         let eok = true;
         for (let i = 0; i < Math.min(ec, 8); i++) {
@@ -110,7 +108,6 @@ export function findMesh(decomp) {
           }
         }
       }
-      // int32 edges
       if (after + 4 + ec * 8 <= len) {
         let eok = true;
         for (let i = 0; i < Math.min(ec, 8); i++) {
@@ -144,7 +141,6 @@ export function findMesh(decomp) {
           }
         }
       }
-      // faces
       for (let es of [4, 8]) {
         const fo = after + 4 + ec * es;
         const fr = tryFaces(posOff, cnt, fo);
@@ -160,7 +156,6 @@ export function findMesh(decomp) {
     }
   }
 
-  // Raw verts (no count prefix) – like 3333 @600
   let candidates = [];
   for (let off = 0; off < len - 12; off += 4) {
     const x = dv.getFloat32(off, true), y = dv.getFloat32(off + 4, true), z = dv.getFloat32(off + 8, true);
@@ -185,31 +180,36 @@ export function findMesh(decomp) {
     if (candidates.length >= 12) break;
   }
 
-  // For each raw candidate, try to find solid after it
   for (const cand of candidates) {
     const cnt = cand.vertCount, posOff = cand.posOffset;
     const after = posOff + cnt * 12;
-    if (after + 4 > len) continue;
-    // Try faces directly after verts (common for Solid2Model)
-    const fr = tryFaces(posOff, cnt, after);
-    if (fr) {
-      const pos = new Float32Array(cnt * 3);
-      for (let i = 0; i < cnt; i++) { pos[i * 3] = dv.getFloat32(posOff + i * 12, true); pos[i * 3 + 1] = dv.getFloat32(posOff + i * 12 + 4, true); pos[i * 3 + 2] = dv.getFloat32(posOff + i * 12 + 8, true); }
-      const idx = new Uint32Array(fr.tris.length * 3);
-      for (let i = 0; i < fr.tris.length; i++) { idx[i * 3] = fr.tris[i][0]; idx[i * 3 + 1] = fr.tris[i][1]; idx[i * 3 + 2] = fr.tris[i][2]; }
-      console.log(`Raw faces: cnt ${cnt} @${cand.offset} ${fr.mode} tris ${fr.tris.length}`);
-      return { positions: pos, indices: idx, vertCount: cnt, triCount: fr.tris.length, offset: cand.offset, size: cand.size, method: `raw-faces-${fr.mode}`, posOffset: posOff };
+    for (let delta = 0; delta < 4096; delta += 4) {
+      const fo = after + delta;
+      if (fo + 4 > len) break;
+      const fr = tryFaces(posOff, cnt, fo);
+      if (fr) {
+        const pos = new Float32Array(cnt * 3);
+        for (let i = 0; i < cnt; i++) { pos[i * 3] = dv.getFloat32(posOff + i * 12, true); pos[i * 3 + 1] = dv.getFloat32(posOff + i * 12 + 4, true); pos[i * 3 + 2] = dv.getFloat32(posOff + i * 12 + 8, true); }
+        const idx = new Uint32Array(fr.tris.length * 3);
+        for (let i = 0; i < fr.tris.length; i++) { idx[i * 3] = fr.tris[i][0]; idx[i * 3 + 1] = fr.tris[i][1]; idx[i * 3 + 2] = fr.tris[i][2]; }
+        console.log(`Raw faces: cnt ${cnt} @${cand.offset} delta ${delta} ${fr.mode} tris ${fr.tris.length}`);
+        return { positions: pos, indices: idx, vertCount: cnt, triCount: fr.tris.length, offset: cand.offset, size: cand.size, method: `raw-faces-${fr.mode}`, posOffset: posOff };
+      }
     }
-    // Try ib search
     const searchEnd = Math.min(len - 6, after + 300000);
     for (let s = after; s < searchEnd; s += 2) {
       if (s + 2 + 60 > len) continue;
       const ic = dv.getUint16(s, true);
-      if (ic < 60 || ic > cnt * 5 || ic % 3 !== 0) continue;
+      if (ic < 60 || ic > cnt * 6 || ic % 3 !== 0) continue;
       if (s + 2 + ic * 2 > len) continue;
-      let ok = true;
-      for (let i = 0; i < Math.min(20, ic); i++) if (dv.getUint16(s + 2 + i * 2, true) >= cnt) { ok = false; break; }
+      let ok = true, maxIdx = 0;
+      for (let i = 0; i < ic; i++) {
+        const idx = dv.getUint16(s + 2 + i * 2, true);
+        if (idx >= cnt || idx === 0xFFFF) { ok = false; break; }
+        if (idx > maxIdx) maxIdx = idx;
+      }
       if (!ok) continue;
+      if (maxIdx < cnt * 0.2) continue;
       const ia = dv.getUint16(s + 2, true), ib = dv.getUint16(s + 4, true), ic0 = dv.getUint16(s + 6, true);
       const ax = dv.getFloat32(posOff + ia * 12, true), ay = dv.getFloat32(posOff + ia * 12 + 4, true), az = dv.getFloat32(posOff + ia * 12 + 8, true);
       const bx = dv.getFloat32(posOff + ib * 12, true), by = dv.getFloat32(posOff + ib * 12 + 4, true), bz = dv.getFloat32(posOff + ib * 12 + 8, true);
@@ -222,8 +222,36 @@ export function findMesh(decomp) {
       for (let i = 0; i < cnt; i++) { pos[i * 3] = dv.getFloat32(posOff + i * 12, true); pos[i * 3 + 1] = dv.getFloat32(posOff + i * 12 + 4, true); pos[i * 3 + 2] = dv.getFloat32(posOff + i * 12 + 8, true); }
       const idx = new Uint32Array(ic);
       for (let i = 0; i < ic; i++) idx[i] = dv.getUint16(s + 2 + i * 2, true);
-      console.log(`Raw ib u16: cnt ${cnt} @${cand.offset} ib ${ic} tris ${ic/3}`);
+      console.log(`Raw ib u16: cnt ${cnt} @${cand.offset} ib ${ic} tris ${ic/3} max ${maxIdx}`);
       return { positions: pos, indices: idx, vertCount: cnt, triCount: ic / 3, offset: cand.offset, size: cand.size, method: `raw-ib-u16`, posOffset: posOff };
+    }
+    for (let s = after; s < searchEnd; s += 4) {
+      if (s + 4 + 60 > len) continue;
+      const ic = dv.getInt32(s, true);
+      if (ic < 60 || ic > cnt * 6 || ic % 3 !== 0 || ic > 100000) continue;
+      if (s + 4 + ic * 4 > len) continue;
+      let ok = true, maxIdx = 0;
+      for (let i = 0; i < ic; i++) {
+        const idx = dv.getInt32(s + 4 + i * 4, true);
+        if (idx < 0 || idx >= cnt) { ok = false; break; }
+        if (idx > maxIdx) maxIdx = idx;
+      }
+      if (!ok) continue;
+      if (maxIdx < cnt * 0.2) continue;
+      const ia = dv.getInt32(s + 4, true), ib = dv.getInt32(s + 8, true), ic0 = dv.getInt32(s + 12, true);
+      const ax = dv.getFloat32(posOff + ia * 12, true), ay = dv.getFloat32(posOff + ia * 12 + 4, true), az = dv.getFloat32(posOff + ia * 12 + 8, true);
+      const bx = dv.getFloat32(posOff + ib * 12, true), by = dv.getFloat32(posOff + ib * 12 + 4, true), bz = dv.getFloat32(posOff + ib * 12 + 8, true);
+      const cx = dv.getFloat32(posOff + ic0 * 12, true), cy = dv.getFloat32(posOff + ic0 * 12 + 4, true), cz = dv.getFloat32(posOff + ic0 * 12 + 8, true);
+      const abx = bx - ax, aby = by - ay, abz = bz - az, acx = cx - ax, acy = cy - ay, acz = cz - az;
+      const crx = aby * acz - abz * acy, cry = abz * acx - abx * acz, crz = abx * acy - aby * acx;
+      const area = Math.sqrt(crx * crx + cry * cry + crz * crz) * 0.5;
+      if (area < 1e-6 || area > 10) continue;
+      const pos = new Float32Array(cnt * 3);
+      for (let i = 0; i < cnt; i++) { pos[i * 3] = dv.getFloat32(posOff + i * 12, true); pos[i * 3 + 1] = dv.getFloat32(posOff + i * 12 + 4, true); pos[i * 3 + 2] = dv.getFloat32(posOff + i * 12 + 8, true); }
+      const idx = new Uint32Array(ic);
+      for (let i = 0; i < ic; i++) idx[i] = dv.getInt32(s + 4 + i * 4, true);
+      console.log(`Raw ib u32: cnt ${cnt} @${cand.offset} ib ${ic} tris ${ic/3} max ${maxIdx}`);
+      return { positions: pos, indices: idx, vertCount: cnt, triCount: ic / 3, offset: cand.offset, size: cand.size, method: `raw-ib-u32`, posOffset: posOff };
     }
   }
 
