@@ -37,132 +37,92 @@ export function findMesh(decomp) {
   }
   candidates.sort((a,b)=>b.vertCount-a.vertCount);
   console.log(`found ${candidates.length} raw candidates`);
-  for(let i=0;i<Math.min(5,candidates.length);i++) console.log(` cand ${i}: cnt ${candidates[i].vertCount} @${candidates[i].offset} stride ${candidates[i].stride} sz ${candidates[i].size.toFixed(2)}`);
+  for(let i=0;i<Math.min(3,candidates.length);i++) console.log(` cand ${i}: cnt ${candidates[i].vertCount} @${candidates[i].offset} stride ${candidates[i].stride} sz ${candidates[i].size.toFixed(2)}`);
 
   for(const cand of candidates){
     const cnt=cand.vertCount, posOff=cand.posOffset, stride=cand.stride;
     const after=posOff+cnt*stride;
-    const isBig=cnt>1000;
-    if(isBig){
-      let hex256='';
-      for(let i=0;i<256&&after+i<len;i++){
-        hex256+=dv.getUint8(after+i).toString(16).padStart(2,'0')+' ';
-        if((i+1)%32===0) hex256+='\n';
-      }
-      console.log(`candidate cnt ${cnt} @${cand.offset} stride ${stride} after ${after} 256b:\n${hex256}`);
-      for(let s=after; s<Math.min(len-16, after+500); s++){
-        const v=dv.getInt32(s,true);
-        if(v===0x09057001 || v===0x09057000){
-          console.log(`  found IndexBuffer marker 0x${v.toString(16)} @${s} (delta ${s-after})`);
-          let p=s+4;
-          if(p+4<=len){
-            const cntIdx=dv.getInt32(p,true);
-            console.log(`    after marker int32 ${cntIdx} @${p} next 16b ${( ()=>{ let h=''; for(let i=0;i<16&&p+4+i<len;i++) h+=dv.getUint8(p+4+i).toString(16).padStart(2,'0')+' '; return h; })()}`);
-            if(cntIdx>=60 && cntIdx<=cnt*6 && cntIdx%3===0 && p+4+cntIdx*2<=len){
-              let ok=true, maxI=0;
-              for(let i=0;i<cntIdx;i++){ const idx=dv.getUint16(p+4+i*2,true); if(idx>=cnt){ ok=false; break; } if(idx>maxI) maxI=idx; }
-              if(ok){
-                const a=dv.getUint16(p+4,true), b=dv.getUint16(p+6,true), c=dv.getUint16(p+8,true);
-                const ar=triArea(posOff,stride,a,b,c);
-                console.log(`    -> plausible u16 ib cnt ${cntIdx} max ${maxI} first ${a},${b},${c} area ${ar}`);
-                if(ar>1e-5 && ar<10){
-                  const pos=new Float32Array(cnt*3);
-                  for(let i=0;i<cnt;i++){ const pp=getPos(posOff,stride,i); pos[i*3]=pp[0]; pos[i*3+1]=pp[1]; pos[i*3+2]=pp[2]; }
-                  const idx=new Uint32Array(cntIdx);
-                  for(let i=0;i<cntIdx;i++) idx[i]=dv.getUint16(p+4+i*2,true);
-                  console.log(`Raw ib u16 Indexed: cnt ${cnt} @${cand.offset} ib ${cntIdx} tris ${cntIdx/3}`);
-                  return {positions:pos,indices:idx,vertCount:cnt,triCount:cntIdx/3,offset:cand.offset,size:cand.size,method:`raw-ib-u16-indexed`,posOffset:posOff,stride};
-                }
-              }
-            }
-            if(cntIdx>=60 && cntIdx<=cnt*6 && cntIdx%3===0 && p+4+cntIdx*4<=len){
-              let ok=true, maxI=0;
-              for(let i=0;i<cntIdx;i++){ const idx=dv.getInt32(p+4+i*4,true); if(idx<0||idx>=cnt){ ok=false; break; } if(idx>maxI) maxI=idx; }
-              if(ok){
-                const a=dv.getInt32(p+4,true), b=dv.getInt32(p+8,true), c=dv.getInt32(p+12,true);
-                const ar=triArea(posOff,stride,a,b,c);
-                console.log(`    -> plausible u32 ib cnt ${cntIdx} max ${maxI} area ${ar}`);
-                if(ar>1e-5 && ar<10){
-                  const pos=new Float32Array(cnt*3);
-                  for(let i=0;i<cnt;i++){ const pp=getPos(posOff,stride,i); pos[i*3]=pp[0]; pos[i*3+1]=pp[1]; pos[i*3+2]=pp[2]; }
-                  const idx=new Uint32Array(cntIdx);
-                  for(let i=0;i<cntIdx;i++) idx[i]=dv.getInt32(p+4+i*4,true);
-                  console.log(`Raw ib u32 Indexed: cnt ${cnt} @${cand.offset} ib ${cntIdx} tris ${cntIdx/3}`);
-                  return {positions:pos,indices:idx,vertCount:cnt,triCount:cntIdx/3,offset:cand.offset,size:cand.size,method:`raw-ib-u32-indexed`,posOffset:posOff,stride};
-                }
-              }
-            }
-            if(p+8<=len){
-              const cnt2=dv.getInt32(p+4,true);
-              console.log(`    try skip version, cnt2 ${cnt2} @${p+4}`);
-              if(cnt2>=60 && cnt2<=cnt*6 && cnt2%3===0 && p+8+cnt2*2<=len){
-                let ok=true, maxI=0;
-                for(let i=0;i<cnt2;i++){ const idx=dv.getUint16(p+8+i*2,true); if(idx>=cnt){ ok=false; break; } if(idx>maxI) maxI=idx; }
-                if(ok){
-                  const a=dv.getUint16(p+8,true), b=dv.getUint16(p+10,true), c=dv.getUint16(p+12,true);
-                  const ar=triArea(posOff,stride,a,b,c);
-                  console.log(`    skip version u16 cnt ${cnt2} max ${maxI} area ${ar} first ${a},${b},${c}`);
-                  if(ar>1e-5 && ar<10){
-                    const pos=new Float32Array(cnt*3);
-                    for(let i=0;i<cnt;i++){ const pp=getPos(posOff,stride,i); pos[i*3]=pp[0]; pos[i*3+1]=pp[1]; pos[i*3+2]=pp[2]; }
-                    const idx=new Uint32Array(cnt2);
-                    for(let i=0;i<cnt2;i++) idx[i]=dv.getUint16(p+8+i*2,true);
-                    console.log(`Raw ib u16 Indexed v2: cnt ${cnt} @${cand.offset} ib ${cnt2} tris ${cnt2/3}`);
-                    return {positions:pos,indices:idx,vertCount:cnt,triCount:cnt2/3,offset:cand.offset,size:cand.size,method:`raw-ib-u16-indexed-v2`,posOffset:posOff,stride};
-                  }
-                }
-              }
-              if(cnt2>=60 && cnt2<=cnt*6 && cnt2%3===0 && p+8+cnt2*4<=len){
-                let ok=true, maxI=0;
-                for(let i=0;i<cnt2;i++){ const idx=dv.getInt32(p+8+i*4,true); if(idx<0||idx>=cnt){ ok=false; break; } if(idx>maxI) maxI=idx; }
-                if(ok){
-                  const a=dv.getInt32(p+8,true), b=dv.getInt32(p+12,true), c=dv.getInt32(p+16,true);
-                  const ar=triArea(posOff,stride,a,b,c);
-                  console.log(`    skip version u32 cnt ${cnt2} max ${maxI} area ${ar}`);
-                  if(ar>1e-5 && ar<10){
-                    const pos=new Float32Array(cnt*3);
-                    for(let i=0;i<cnt;i++){ const pp=getPos(posOff,stride,i); pos[i*3]=pp[0]; pos[i*3+1]=pp[1]; pos[i*3+2]=pp[2]; }
-                    const idx=new Uint32Array(cnt2);
-                    for(let i=0;i<cnt2;i++) idx[i]=dv.getInt32(p+8+i*4,true);
-                    console.log(`Raw ib u32 Indexed v2: cnt ${cnt} @${cand.offset} ib ${cnt2} tris ${cnt2/3}`);
-                    return {positions:pos,indices:idx,vertCount:cnt,triCount:cnt2/3,offset:cand.offset,size:cand.size,method:`raw-ib-u32-indexed-v2`,posOffset:posOff,stride};
-                  }
-                }
-              }
-            }
+    if(cnt<1000) continue;
+    // Look for IndexBuffer marker 0x09057001 (new) and 0x09057000 (old)
+    for(let s=after; s<Math.min(len-16, after+600); s++){
+      const v=dv.getInt32(s,true);
+      if(v===0x09057001 || v===0x09057000){
+        const isNew = (v===0x09057001);
+        console.log(`  found IndexBuffer marker 0x${v.toString(16)} @${s} delta ${s-after} new=${isNew}`);
+        let p=s+4;
+        if(p+8>len) continue;
+        const flags=dv.getInt32(p,true);
+        const count=dv.getInt32(p+4,true);
+        console.log(`    flags ${flags} count ${count} @${p} (cnt ${cnt})`);
+        if(count<60 || count>cnt*6 || count%3!==0) {
+          console.log(`    count reject`);
+          continue;
+        }
+        if(isNew){
+          // delta-encoded int16
+          if(p+8+count*2>len){ console.log(`    not enough data for delta`); continue; }
+          let cur=0;
+          const indices=new Uint32Array(count);
+          let maxI=0, ok=true;
+          for(let i=0;i<count;i++){
+            const delta=dv.getInt16(p+8+i*2,true);
+            cur+=delta;
+            if(cur<0||cur>=cnt){ ok=false; break; }
+            indices[i]=cur;
+            if(cur>maxI) maxI=cur;
           }
+          if(!ok){ console.log(`    delta decode out of range`); continue; }
+          const a=indices[0], b=indices[1], c=indices[2];
+          const ar=triArea(posOff,stride,a,b,c);
+          console.log(`    delta ib first ${a},${b},${c} area ${ar} max ${maxI}`);
+          if(ar<1e-5||ar>10){ console.log(`    area reject`); continue; }
+          const pos=new Float32Array(cnt*3);
+          for(let i=0;i<cnt;i++){ const pp=getPos(posOff,stride,i); pos[i*3]=pp[0]; pos[i*3+1]=pp[1]; pos[i*3+2]=pp[2]; }
+          console.log(`Raw ib delta: cnt ${cnt} @${cand.offset} stride ${stride} ib ${count} tris ${count/3} max ${maxI}`);
+          return {positions:pos,indices:indices,vertCount:cnt,triCount:count/3,offset:cand.offset,size:cand.size,method:`raw-ib-delta-new`,posOffset:posOff,stride};
+        } else {
+          // old direct u16
+          if(p+8+count*2>len) continue;
+          let ok=true, maxI=0;
+          for(let i=0;i<count;i++){ const idx=dv.getUint16(p+8+i*2,true); if(idx>=cnt){ ok=false; break; } if(idx>maxI) maxI=idx; }
+          if(!ok) continue;
+          const a=dv.getUint16(p+8,true), b=dv.getUint16(p+10,true), c=dv.getUint16(p+12,true);
+          const ar=triArea(posOff,stride,a,b,c);
+          if(ar<1e-5||ar>10) continue;
+          const pos=new Float32Array(cnt*3);
+          for(let i=0;i<cnt;i++){ const pp=getPos(posOff,stride,i); pos[i*3]=pp[0]; pos[i*3+1]=pp[1]; pos[i*3+2]=pp[2]; }
+          const idx=new Uint32Array(count);
+          for(let i=0;i<count;i++) idx[i]=dv.getUint16(p+8+i*2,true);
+          console.log(`Raw ib direct: cnt ${cnt} @${cand.offset} ib ${count} tris ${count/3}`);
+          return {positions:pos,indices:idx,vertCount:cnt,triCount:count/3,offset:cand.offset,size:cand.size,method:`raw-ib-direct-old`,posOffset:posOff,stride};
         }
       }
-      let bestRun=null, bestLen=0;
-      const searchEnd=Math.min(len-6, after+300000);
-      for(let s=after; s<searchEnd-6; s+=2){
-        const a=dv.getUint16(s,true), b=dv.getUint16(s+2,true), c=dv.getUint16(s+4,true);
-        if(a>=cnt||b>=cnt||c>=cnt||a===0xFFFF||b===0xFFFF||c===0xFFFF) continue;
-        if(a===b||b===c||a===c) continue;
+    }
+    // Also try VisualIndexed direct (0x0906A000 old) – direct u16 without IndexBuffer wrapper
+    for(let s=after; s<Math.min(len-16, after+600); s++){
+      const v=dv.getInt32(s,true);
+      if(v===0x0906A000){
+        let p=s+4;
+        if(p+4>len) continue;
+        const count=dv.getInt32(p,true);
+        if(count<60||count>cnt*6||count%3!==0) continue;
+        if(p+4+count*2>len) continue;
+        let ok=true, maxI=0;
+        for(let i=0;i<count;i++){ const idx=dv.getUint16(p+4+i*2,true); if(idx>=cnt){ ok=false; break; } if(idx>maxI) maxI=idx; }
+        if(!ok) continue;
+        const a=dv.getUint16(p+4,true), b=dv.getUint16(p+6,true), c=dv.getUint16(p+8,true);
         const ar=triArea(posOff,stride,a,b,c);
         if(ar<1e-5||ar>10) continue;
-        let run=3, cur=s+6;
-        while(cur+2<len && run<20000){
-          const idx=dv.getUint16(cur,true);
-          if(idx>=cnt||idx===0xFFFF) break;
-          run++; cur+=2;
-        }
-        if(run>=90 && run>bestLen){ bestLen=run; bestRun={off:s,len:run}; }
-        if(bestLen>5000) break;
-      }
-      if(bestRun){
         const pos=new Float32Array(cnt*3);
-        for(let i=0;i<cnt;i++){ const p=getPos(posOff,stride,i); pos[i*3]=p[0]; pos[i*3+1]=p[1]; pos[i*3+2]=p[2]; }
-        const outLen=Math.floor(bestRun.len/3)*3;
-        const idx=new Uint32Array(outLen);
-        for(let i=0;i<outLen;i++) idx[i]=dv.getUint16(bestRun.off+i*2,true);
-        console.log(`Raw ib u16 brute: cnt ${cnt} @${cand.offset} stride ${stride} ib ${outLen} tris ${outLen/3} @${bestRun.off}`);
-        return {positions:pos,indices:idx,vertCount:cnt,triCount:outLen/3,offset:cand.offset,size:cand.size,method:`raw-ib-u16-brute`,posOffset:posOff,stride};
-      } else {
-        console.log(`  no brute u16 run for cnt ${cnt}`);
+        for(let i=0;i<cnt;i++){ const pp=getPos(posOff,stride,i); pos[i*3]=pp[0]; pos[i*3+1]=pp[1]; pos[i*3+2]=pp[2]; }
+        const idx=new Uint32Array(count);
+        for(let i=0;i<count;i++) idx[i]=dv.getUint16(p+4+i*2,true);
+        console.log(`Raw ib VisualIndexed old: cnt ${cnt} @${cand.offset} ib ${count} tris ${count/3}`);
+        return {positions:pos,indices:idx,vertCount:cnt,triCount:count/3,offset:cand.offset,size:cand.size,method:`visual-indexed-old`,posOffset:posOff,stride};
       }
     }
   }
+
   if(candidates.length){
     let best=candidates[0];
     for(const c of candidates) if(c.vertCount>best.vertCount) best=c;
