@@ -27,7 +27,10 @@ const controls=new OrbitControls(camera, renderer.domElement); controls.enableDa
 itemRoot=new THREE.Group(); scene.add(itemRoot);
 
 function resize(){
-  const r=canvas.parentElement.getBoundingClientRect();
+  const parent=canvas.parentElement;
+  if(!parent) return;
+  const r=parent.getBoundingClientRect();
+  if(r.width<10||r.height<10) return; // hidden or not laid out yet
   renderer.setSize(r.width,r.height,false);
   camera.aspect=r.width/r.height; camera.updateProjectionMatrix();
 }
@@ -43,9 +46,27 @@ function clearItem(){
 function showProxy(reason){
   clearItem();
   const geom=new THREE.IcosahedronGeometry(0.8,1);
-  const mat=new THREE.MeshStandardMaterial({color:0x8ab4ff, wireframe:false, metalness:0.1, roughness:0.5});
+  const mat=new THREE.MeshBasicMaterial({color:0x8ab4ff, wireframe:false});
   const m=new THREE.Mesh(geom, mat); itemRoot.add(m);
+  // frame to proxy
+  const box=new THREE.Box3().setFromObject(itemRoot);
+  if(!box.isEmpty()){
+    const ctr=box.getCenter(new THREE.Vector3());
+    const sz=box.getSize(new THREE.Vector3());
+    const maxDim=Math.max(sz.x,sz.y,sz.z,1);
+    controls.target.copy(ctr);
+    camera.position.set(ctr.x+maxDim*1.8, ctr.y+maxDim*1.2, ctr.z+maxDim*1.8);
+    camera.lookAt(ctr);
+    controls.update();
+  }else{
+    controls.target.set(0,0,0);
+    camera.position.set(3,2,3);
+    camera.lookAt(0,0,0);
+    controls.update();
+  }
   setMeta((fileName||"")+" – proxy: "+reason);
+  // ensure visible
+  setTimeout(()=>{ resize(); }, 50);
 }
 
 function showMesh(geoms){
@@ -54,24 +75,44 @@ function showMesh(geoms){
   for(const desc of geoms){
     try{
       const geom=createThreeGeometry(THREE, desc);
-      const mat=new THREE.MeshStandardMaterial({color:0xdddddd, metalness:0.1, roughness:0.7});
-      const mesh=new THREE.Mesh(geom, mat);
+      let mesh;
+      if(desc.indices && desc.indices.length>=30){
+        const mat=new THREE.MeshStandardMaterial({color:0xdddddd, metalness:0.1, roughness:0.7, side:THREE.DoubleSide});
+        mesh=new THREE.Mesh(geom, mat);
+      }else{
+        // points
+        const mat=new THREE.PointsMaterial({color:0xdddddd, size:0.04});
+        mesh=new THREE.Points(geom, mat);
+      }
       itemRoot.add(mesh);
       has=true;
     }catch(e){ console.warn("geom fail",e); }
   }
-  if(!has) showProxy("mesh build failed");
-  else{
-    // frame
-    const box=new THREE.Box3().setFromObject(itemRoot);
-    const sz=box.getSize(new THREE.Vector3());
-    const ctr=box.getCenter(new THREE.Vector3());
+  if(!has){ showProxy("mesh build failed"); return; }
+  // frame – robust
+  const box=new THREE.Box3().setFromObject(itemRoot);
+  if(box.isEmpty() || !Number.isFinite(box.min.x)){
+    controls.target.set(0,0,0);
+    camera.position.set(3,2,3);
+    camera.lookAt(0,0,0);
+    controls.update();
+    return;
+  }
+  const sz=box.getSize(new THREE.Vector3());
+  const ctr=box.getCenter(new THREE.Vector3());
+  const maxDim=Math.max(sz.x,sz.y,sz.z,0.5);
+  if(maxDim>100 || maxDim<0.01){
+    // fallback – object too big/small, don't use its box
+    controls.target.set(0,0,0);
+    camera.position.set(3,2,3);
+    camera.lookAt(0,0,0);
+  }else{
     controls.target.copy(ctr);
-    const maxDim=Math.max(sz.x,sz.y,sz.z,1);
     camera.position.set(ctr.x+maxDim*1.8, ctr.y+maxDim*1.2, ctr.z+maxDim*1.8);
     camera.lookAt(ctr);
-    controls.update();
   }
+  controls.update();
+  setTimeout(()=>{ resize(); }, 50);
 }
 
 function renderIR(){
@@ -127,6 +168,10 @@ async function loadFile(f){
     $('irCard').style.display='block';
     $('previewCard').style.display='block';
     $('exportCard').style.display='block';
+    // ensure canvas gets size now that it's visible
+    resize();
+    // also after a tick (layout)
+    setTimeout(()=>resize(), 100);
     $('foundPill').textContent = mover? (mover.type==="old"?`KC @${mover.off} Trans ${mover.transMin}→${mover.transMax} X Rot ${mover.angleMin}→${mover.angleMax}°`:`mover @${moverOff} RotP ${mover.rotP} TransP ${mover.transP}`) :'no mover – static';
     setStatus('Ready – edit IR or paste from AI, then Check');
     setMeta(`${f.name} ${ab.byteLength} → decomp ${out.length}`);
@@ -219,12 +264,16 @@ function animate(){
     const s=sampleIR(irObj,t);
     if(itemRoot){
       // new: use vec if available, fallback to legacy single axis
+      // preview scaling: keep big moves visible (Santa -16→16 would fly off)
+      let scale=1;
       if(s.trans){
-        itemRoot.position.x=s.trans.x||0;
-        itemRoot.position.y=s.trans.y||0;
-        itemRoot.position.z=s.trans.z||0;
+        const maxAbs=Math.max(Math.abs(s.trans.x||0),Math.abs(s.trans.y||0),Math.abs(s.trans.z||0));
+        if(maxAbs>4) scale=4/maxAbs*0.5; // scale down large moves for preview only
+        itemRoot.position.x=(s.trans.x||0)*scale;
+        itemRoot.position.y=(s.trans.y||0)*scale;
+        itemRoot.position.z=(s.trans.z||0)*scale;
       }else{
-        itemRoot.position.y=s.transY||0;
+        itemRoot.position.y=(s.transY||0)* (Math.abs(s.transY||0)>4? 0.2:1);
       }
       if(s.rotVec){
         itemRoot.rotation.x=s.rotVec.x||0;
