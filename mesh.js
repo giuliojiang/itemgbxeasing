@@ -71,9 +71,9 @@ export function findMesh(decomp){
         cnt++; o+=stride;
       }
       if(hasNaN) continue;
-      if(cnt<80) continue;
+      if(cnt<60) continue;
       const size=Math.max(maxx-minx,maxy-miny,maxz-minz);
-      if(size<0.2||size>15) continue;
+      if(size<0.12||size>35) continue;
       if(candidates.some(c=>c.offset===off&&c.stride===stride)) continue;
       candidates.push({offset:off,vertCount:cnt,size,posOffset:off,stride});
       if(candidates.length>=24) break;
@@ -81,6 +81,30 @@ export function findMesh(decomp){
     if(candidates.length>=24) break;
   }
   candidates.sort((a,b)=>b.vertCount-a.vertCount);
+  if(candidates.length===0){
+    // fallback looser for large files like MovingDuck 908k
+    for(let off=0;off<len-12;off+=4){
+      const x0=dv.getFloat32(off,true),y0=dv.getFloat32(off+4,true),z0=dv.getFloat32(off+8,true);
+      if(!Number.isFinite(x0)||!Number.isFinite(y0)||!Number.isFinite(z0)) continue;
+      if(Math.abs(x0)>200||Math.abs(y0)>200||Math.abs(z0)>200) continue;
+      let minx=x0,miny=y0,minz=z0,maxx=x0,maxy=y0,maxz=z0,cnt=1,o=off+12;
+      while(o+12<=len&&cnt<12000){
+        const xx=dv.getFloat32(o,true),yy=dv.getFloat32(o+4,true),zz=dv.getFloat32(o+8,true);
+        if(!Number.isFinite(xx)||!Number.isFinite(yy)||!Number.isFinite(zz)) break;
+        if(Math.abs(xx)>200||Math.abs(yy)>200||Math.abs(zz)>200) break;
+        if(xx<minx)minx=xx; if(yy<miny)miny=yy; if(zz<minz)minz=zz;
+        if(xx>maxx)maxx=xx; if(yy>maxy)maxy=yy; if(zz>maxz)maxz=zz;
+        if(Math.max(maxx-minx,maxy-miny,maxz-minz)>50) break;
+        cnt++; o+=12;
+      }
+      if(cnt<200) continue;
+      const size=Math.max(maxx-minx,maxy-miny,maxz-minz);
+      if(size<0.5||size>80) continue;
+      candidates.push({offset:off,vertCount:cnt,size,posOffset:off,stride:12});
+      if(candidates.length>=20) break;
+    }
+    candidates.sort((a,b)=>b.vertCount-a.vertCount);
+  }
   console.log(`found ${candidates.length} raw candidates`);
   for(let i=0;i<Math.min(5,candidates.length);i++) console.log(` cand ${i}: cnt ${candidates[i].vertCount} @${candidates[i].offset} stride ${candidates[i].stride} sz ${candidates[i].size.toFixed(2)}`);
 
