@@ -1,220 +1,210 @@
-// mesh.js — robust heuristic mesh extractor (fixes mangled needle)
+/**
+ * mesh.js – Robust Crystal mesh extractor for Item.Gbx (old format)
+ * v4 – edge->tris for Balloons (2856 verts 2695 tris), ib search for others
+ */
+
+export function findMesh(decomp) {
+  const dv = new DataView(decomp.buffer, decomp.byteOffset, decomp.byteLength);
+  const len = decomp.length;
+
+  // 1. Crystal edge->tris (old Item.Gbx, Version<35, Int2 edges)
+  for (let off = 0; off < len - 4 - 60 * 12; off += 4) {
+    const cnt = dv.getInt32(off, true);
+    if (cnt < 80 || cnt > 6000) continue;
+    const posOff = off + 4;
+    if (posOff + cnt * 12 > len) continue;
+    let minx = 1e9, miny = 1e9, minz = 1e9, maxx = -1e9, maxy = -1e9, maxz = -1e9;
+    let ok = true, zero = 0;
+    for (let i = 0; i < Math.min(cnt, 60); i++) {
+      const x = dv.getFloat32(posOff + i * 12, true);
+      const y = dv.getFloat32(posOff + i * 12 + 4, true);
+      const z = dv.getFloat32(posOff + i * 12 + 8, true);
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) { ok = false; break; }
+      if (Math.abs(x) < 1e-6 && Math.abs(y) < 1e-6 && Math.abs(z) < 1e-6) zero++;
+      if (Math.abs(x) > 30 || Math.abs(y) > 30 || Math.abs(z) > 30) { ok = false; break; }
+      if (x < minx) minx = x; if (y < miny) miny = y; if (z < minz) minz = z;
+      if (x > maxx) maxx = x; if (y > maxy) maxy = y; if (z > maxz) maxz = z;
+    }
+    if (!ok || zero > 30) continue;
+    const sx = maxx - minx, sy = maxy - miny, sz = maxz - minz;
+    const size = Math.max(sx, sy, sz);
+    if (size < 0.2 || size > 12) continue;
+    if (Math.min(sx, sy, sz) < size * 0.02 && cnt > 200) continue;
+    const after = posOff + cnt * 12;
+    if (after + 4 > len) continue;
+    const edgeCnt = dv.getInt32(after, true);
+    if (edgeCnt < cnt * 0.4 || edgeCnt > cnt * 3) continue;
+    if (after + 4 + edgeCnt * 8 > len) continue;
+    let edgesOk = true;
+    for (let i = 0; i < Math.min(edgeCnt, 16); i++) {
+      const a = dv.getInt32(after + 4 + i * 8, true), b = dv.getInt32(after + 4 + i * 8 + 4, true);
+      if (a < 0 || a >= cnt || b < 0 || b >= cnt || a === b) { edgesOk = false; break; }
+    }
+    if (!edgesOk) continue;
+    const adj = new Map(); for (let i = 0; i < cnt; i++) adj.set(i, new Set());
+    for (let i = 0; i < edgeCnt; i++) {
+      const a = dv.getInt32(after + 4 + i * 8, true), b = dv.getInt32(after + 4 + i * 8 + 4, true);
+      if (a >= 0 && a < cnt && b >= 0 && b < cnt) { adj.get(a).add(b); adj.get(b).add(a); }
+    }
+    let tris = []; let seen = new Set();
+    for (let i = 0; i < cnt; i++) {
+      const neigh = [...adj.get(i)];
+      if (neigh.length < 2) continue;
+      for (let j = 0; j < neigh.length; j++) for (let k = j + 1; k < neigh.length; k++) {
+        const a = neigh[j], b = neigh[k];
+        if (adj.get(a).has(b)) {
+          const s = [i, a, b].sort((x, y) => x - y).join(",");
+          if (!seen.has(s)) { seen.add(s); tris.push([i, a, b]); }
+        }
+      }
+      if (tris.length > cnt * 4) break;
+    }
+    if (tris.length < cnt * 0.3 || tris.length > cnt * 3 || tris.length < 20) continue;
+    let valid = 0;
+    for (let t = 0; t < Math.min(10, tris.length); t++) {
+      const [ia, ib, ic] = tris[t];
+      const ax = dv.getFloat32(posOff + ia * 12, true), ay = dv.getFloat32(posOff + ia * 12 + 4, true), az = dv.getFloat32(posOff + ia * 12 + 8, true);
+      const bx = dv.getFloat32(posOff + ib * 12, true), by = dv.getFloat32(posOff + ib * 12 + 4, true), bz = dv.getFloat32(posOff + ib * 12 + 8, true);
+      const cx = dv.getFloat32(posOff + ic * 12, true), cy = dv.getFloat32(posOff + ic * 12 + 4, true), cz = dv.getFloat32(posOff + ic * 12 + 8, true);
+      const abx = bx - ax, aby = by - ay, abz = bz - az;
+      const acx = cx - ax, acy = cy - ay, acz = cz - az;
+      const crx = aby * acz - abz * acy, cry = abz * acx - abx * acz, crz = abx * acy - aby * acx;
+      const area = Math.sqrt(crx * crx + cry * cry + crz * crz) * 0.5;
+      if (area > 1e-6 && area < 10) valid++;
+    }
+    if (valid < Math.min(5, tris.length)) continue;
+    const positions = new Float32Array(cnt * 3);
+    for (let i = 0; i < cnt; i++) {
+      positions[i * 3] = dv.getFloat32(posOff + i * 12, true);
+      positions[i * 3 + 1] = dv.getFloat32(posOff + i * 12 + 4, true);
+      positions[i * 3 + 2] = dv.getFloat32(posOff + i * 12 + 8, true);
+    }
+    const indices = new Uint32Array(tris.length * 3);
+    for (let i = 0; i < tris.length; i++) { indices[i * 3] = tris[i][0]; indices[i * 3 + 1] = tris[i][1]; indices[i * 3 + 2] = tris[i][2]; }
+    const faceOff = after + 4 + edgeCnt * 8;
+    const faceCnt = faceOff + 4 <= len ? dv.getInt32(faceOff, true) : 0;
+    console.log(`Crystal mesh: cnt ${cnt} @${off} sz ${size.toFixed(2)} edge ${edgeCnt} face ${faceCnt} tris ${tris.length}`);
+    return { positions, indices, vertCount: cnt, triCount: tris.length, offset: off, size, method: `crystal-edges`, faceCount: faceCnt, edgeCount: edgeCnt, posOffset: posOff };
+  }
+
+  // 2. Try point cloud + ib search (for Santa etc.)
+  let candidates = [];
+  for (let off = 0; off < len - 12; off += 4) {
+    if (off + 12 > len) break;
+    const x = dv.getFloat32(off, true), y = dv.getFloat32(off + 4, true), z = dv.getFloat32(off + 8, true);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+    if (Math.abs(x) > 30 || Math.abs(y) > 30 || Math.abs(z) > 30) continue;
+    let minx = x, miny = y, minz = z, maxx = x, maxy = y, maxz = z;
+    let cnt = 1, o = off + 12;
+    while (o + 12 <= len && cnt < 6000) {
+      const xx = dv.getFloat32(o, true), yy = dv.getFloat32(o + 4, true), zz = dv.getFloat32(o + 8, true);
+      if (!Number.isFinite(xx) || !Number.isFinite(yy) || !Number.isFinite(zz)) break;
+      if (Math.abs(xx) > 30 || Math.abs(yy) > 30 || Math.abs(zz) > 30) break;
+      if (xx < minx) minx = xx; if (yy < miny) miny = yy; if (zz < minz) minz = zz;
+      if (xx > maxx) maxx = xx; if (yy > maxy) maxy = yy; if (zz > maxz) maxz = zz;
+      const sz = Math.max(maxx - minx, maxy - miny, maxz - minz);
+      if (sz > 12) break;
+      cnt++; o += 12;
+    }
+    if (cnt < 80) continue;
+    const size = Math.max(maxx - minx, maxy - miny, maxz - minz);
+    if (size < 0.15 || size > 12) continue;
+    candidates.push({ offset: off, vertCount: cnt, size, posOffset: off, minx, miny, minz, maxx, maxy, maxz });
+    if (candidates.length >= 8) break;
+  }
+
+  // For each candidate, try ib
+  for (const cand of candidates) {
+    const cnt = cand.vertCount;
+    const posOff = cand.posOffset;
+    const searchStart = posOff + cnt * 12;
+    const searchEnd = Math.min(len - 6, searchStart + 250000);
+    for (let s = searchStart; s < searchEnd; s += 2) {
+      // u16 count prefix
+      if (s + 2 + 60 > len) continue;
+      const icnt = dv.getUint16(s, true);
+      if (icnt < 60 || icnt > cnt * 4 || icnt % 3 !== 0) continue;
+      if (s + 2 + icnt * 2 > len) continue;
+      let ok = true;
+      for (let i = 0; i < Math.min(30, icnt); i++) { const idx = dv.getUint16(s + 2 + i * 2, true); if (idx >= cnt) { ok = false; break; } }
+      if (!ok) continue;
+      // area check first tri
+      const ia = dv.getUint16(s + 2, true), ib = dv.getUint16(s + 4, true), ic = dv.getUint16(s + 6, true);
+      if (ia >= cnt || ib >= cnt || ic >= cnt) continue;
+      const ax = dv.getFloat32(posOff + ia * 12, true), ay = dv.getFloat32(posOff + ia * 12 + 4, true), az = dv.getFloat32(posOff + ia * 12 + 8, true);
+      const bx = dv.getFloat32(posOff + ib * 12, true), by = dv.getFloat32(posOff + ib * 12 + 4, true), bz = dv.getFloat32(posOff + ib * 12 + 8, true);
+      const cx = dv.getFloat32(posOff + ic * 12, true), cy = dv.getFloat32(posOff + ic * 12 + 4, true), cz = dv.getFloat32(posOff + ic * 12 + 8, true);
+      const abx = bx - ax, aby = by - ay, abz = bz - az;
+      const acx = cx - ax, acy = cy - ay, acz = cz - az;
+      const crx = aby * acz - abz * acy, cry = abz * acx - abx * acz, crz = abx * acy - aby * acx;
+      const area = Math.sqrt(crx * crx + cry * cry + crz * crz) * 0.5;
+      if (area < 1e-6 || area > 10) continue;
+      // found ib!
+      const positions = new Float32Array(cnt * 3);
+      for (let i = 0; i < cnt; i++) { positions[i * 3] = dv.getFloat32(posOff + i * 12, true); positions[i * 3 + 1] = dv.getFloat32(posOff + i * 12 + 4, true); positions[i * 3 + 2] = dv.getFloat32(posOff + i * 12 + 8, true); }
+      const indices = new Uint32Array(icnt);
+      for (let i = 0; i < icnt; i++) indices[i] = dv.getUint16(s + 2 + i * 2, true);
+      console.log(`Mesh via ib: cnt ${cnt} @${cand.offset} sz ${cand.size.toFixed(2)} ib ${icnt} @${s} tris ${icnt/3}`);
+      return { positions, indices, vertCount: cnt, triCount: icnt / 3, offset: cand.offset, size: cand.size, method: `heuristic-ib-u16`, posOffset: posOff, ibOffset: s + 2 };
+    }
+    // u32 ib
+    for (let s = searchStart; s < searchEnd; s += 4) {
+      if (s + 4 + 60 > len) continue;
+      const icnt = dv.getInt32(s, true);
+      if (icnt < 60 || icnt > cnt * 4 || icnt % 3 !== 0 || icnt > 100000) continue;
+      if (s + 4 + icnt * 4 > len) continue;
+      let ok = true;
+      for (let i = 0; i < Math.min(30, icnt); i++) { const idx = dv.getInt32(s + 4 + i * 4, true); if (idx < 0 || idx >= cnt) { ok = false; break; } }
+      if (!ok) continue;
+      const ia = dv.getInt32(s + 4, true), ib = dv.getInt32(s + 8, true), ic = dv.getInt32(s + 12, true);
+      const ax = dv.getFloat32(posOff + ia * 12, true), ay = dv.getFloat32(posOff + ia * 12 + 4, true), az = dv.getFloat32(posOff + ia * 12 + 8, true);
+      const bx = dv.getFloat32(posOff + ib * 12, true), by = dv.getFloat32(posOff + ib * 12 + 4, true), bz = dv.getFloat32(posOff + ib * 12 + 8, true);
+      const cx = dv.getFloat32(posOff + ic * 12, true), cy = dv.getFloat32(posOff + ic * 12 + 4, true), cz = dv.getFloat32(posOff + ic * 12 + 8, true);
+      const abx = bx - ax, aby = by - ay, abz = bz - az;
+      const acx = cx - ax, acy = cy - ay, acz = cz - az;
+      const crx = aby * acz - abz * acy, cry = abz * acx - abx * acz, crz = abx * acy - aby * acx;
+      const area = Math.sqrt(crx * crx + cry * cry + crz * crz) * 0.5;
+      if (area < 1e-6 || area > 10) continue;
+      const positions = new Float32Array(cnt * 3);
+      for (let i = 0; i < cnt; i++) { positions[i * 3] = dv.getFloat32(posOff + i * 12, true); positions[i * 3 + 1] = dv.getFloat32(posOff + i * 12 + 4, true); positions[i * 3 + 2] = dv.getFloat32(posOff + i * 12 + 8, true); }
+      const indices = new Uint32Array(icnt);
+      for (let i = 0; i < icnt; i++) indices[i] = dv.getInt32(s + 4 + i * 4, true);
+      console.log(`Mesh via ib u32: cnt ${cnt} @${cand.offset} ib ${icnt} @${s}`);
+      return { positions, indices, vertCount: cnt, triCount: icnt / 3, offset: cand.offset, size: cand.size, method: `heuristic-ib-u32`, posOffset: posOff };
+    }
+  }
+
+  // Fallback to largest point cloud
+  if (candidates.length) {
+    let best = candidates[0];
+    for (const c of candidates) if (c.vertCount > best.vertCount) best = c;
+    const positions = new Float32Array(best.vertCount * 3);
+    for (let i = 0; i < best.vertCount; i++) {
+      positions[i * 3] = dv.getFloat32(best.posOffset + i * 12, true);
+      positions[i * 3 + 1] = dv.getFloat32(best.posOffset + i * 12 + 4, true);
+      positions[i * 3 + 2] = dv.getFloat32(best.posOffset + i * 12 + 8, true);
+    }
+    console.log(`Point cloud: cnt ${best.vertCount} @${best.offset} sz ${best.size.toFixed(2)}`);
+    return { positions, indices: null, vertCount: best.vertCount, triCount: 0, offset: best.offset, size: best.size, method: `points-fallback`, posOffset: best.posOffset };
+  }
+
+  return null;
+}
+
 export function parseMesh(decomp){
-  const dv=new DataView(decomp.buffer, decomp.byteOffset, decomp.byteLength);
-  const len=decomp.length;
-
-  function boxSize(verts, stride, off, count){
-    let minx=1e9,miny=1e9,minz=1e9,maxx=-1e9,maxy=-1e9,maxz=-1e9;
-    let nan=0;
-    for(let i=0;i<count;i++){
-      const x=dv.getFloat32(off+i*stride,true);
-      const y=dv.getFloat32(off+i*stride+4,true);
-      const z=dv.getFloat32(off+i*stride+8,true);
-      if(!Number.isFinite(x)||!Number.isFinite(y)||!Number.isFinite(z)){ nan++; if(nan>5) return {size:0, bad:true}; continue; }
-      if(x<minx) minx=x; if(y<miny) miny=y; if(z<minz) minz=z;
-      if(x>maxx) maxx=x; if(y>maxy) maxy=y; if(z>maxz) maxz=z;
-    }
-    const sx=maxx-minx, sy=maxy-miny, sz=maxz-minz;
-    const size=Math.max(sx,sy,sz);
-    return {size, sx,sy,sz, minx,miny,minz,maxx,maxy,maxz, bad: size>100 || size<0.02};
-  }
-
-  function scanStride(stride){
-    let best=null;
-    // step 4 to be fast, but check alignment
-    for(let off=0; off<len-stride*50; off+=4){
-      // quick reject: first 3 verts must be plausible
-      let cnt=0, o=off;
-      let bad=0;
-      while(o+stride<=len && cnt<80000){
-        const x=dv.getFloat32(o,true), y=dv.getFloat32(o+4,true), z=dv.getFloat32(o+8,true);
-        if(!Number.isFinite(x)||!Number.isFinite(y)||!Number.isFinite(z)) break;
-        if(Math.abs(x)>100||Math.abs(y)>100||Math.abs(z)>100) break;
-        // reject long runs of zeros – likely padding
-        if(Math.abs(x)<1e-6&&Math.abs(y)<1e-6&&Math.abs(z)<1e-6){
-          let zc=0;
-          for(let k=0;k<5 && o+k*stride+11<len;k++) if(Math.abs(dv.getFloat32(o+k*stride,true))<1e-6 && Math.abs(dv.getFloat32(o+k*stride+4,true))<1e-6) zc++;
-          if(zc>=3) break;
-        }
-        cnt++; o+=stride;
-        if(cnt>20000) break;
-      }
-      if(cnt<80) continue;
-      // compute box of first 200 verts
-      let minx=1e9,miny=1e9,minz=1e9,maxx=-1e9,maxy=-1e9,maxz=-1e9;
-      let ok=true;
-      let zeroCount=0;
-      for(let i=0;i<Math.min(cnt,200);i++){
-        const x=dv.getFloat32(off+i*stride,true), y=dv.getFloat32(off+i*stride+4,true), z=dv.getFloat32(off+i*stride+8,true);
-        if(!Number.isFinite(x)||!Number.isFinite(y)||!Number.isFinite(z)){ ok=false; break; }
-        if(Math.abs(x)<1e-5&&Math.abs(y)<1e-5&&Math.abs(z)<1e-5) zeroCount++;
-        if(x<minx) minx=x; if(y<miny) miny=y; if(z<minz) minz=z;
-        if(x>maxx) maxx=x; if(y>maxy) maxy=y; if(z>maxz) maxz=z;
-      }
-      if(!ok) continue;
-      if(zeroCount>40) continue; // too many zeros – padding block
-      const sx=maxx-minx, sy=maxy-miny, sz=maxz-minz;
-      const size=Math.max(sx,sy,sz);
-      if(size>12||size<0.15) continue; // tight: visual mesh 0.15m to 12m
-      if(sx<1e-4 && sy<1e-4 && sz<1e-4) continue;
-      // reject flat line
-      if((sx<0.01 && sy<0.01) || (sx<0.01 && sz<0.01) || (sy<0.01 && sz<0.01)) continue;
-      const score=cnt * (size>0.3?1:0.2);
-      if(!best || score>best.score){
-        best={off, count:cnt, stride, size, sx,sy,sz, score};
-      }
-      if(cnt>100) off+=cnt*stride-4; // skip ahead
-    }
-    return best;
-  }
-
-  const strides=[12,24,28,32,36,40,44];
-  let candidates=[];
-  for(const st of strides){
-    const b=scanStride(st);
-    if(b) candidates.push(b);
-  }
-  if(!candidates.length){
-    return {geometries:[], reason:`no plausible vert block (tried ${strides.join('/')})`};
-  }
-  // keep top 3 by score, but filter duplicates (same off)
-  candidates.sort((a,b)=>b.score-a.score);
-  const uniq=[];
-  for(const c of candidates){
-    if(!uniq.some(u=>Math.abs(u.off-c.off)<c.stride*10)) uniq.push(c);
-    if(uniq.length>=3) break;
-  }
-
-  let geoms=[];
-  for(const cand of uniq){
-    const vertCount=cand.count;
-    const posOff=cand.off;
-    const stride=cand.stride;
-
-    // ib search with stricter validation
-    let ibOff=-1, ibCount=0, isU16=true;
-    const searchStart = posOff + vertCount*stride;
-    const searchEnd = Math.min(len-2, searchStart+120000);
-    let bestIb=null;
-    for(let s=searchStart; s<searchEnd-12; s+=4){
-      const maybeCount = dv.getUint32(s,true);
-      if(maybeCount>=60 && maybeCount<vertCount*4 && maybeCount%3===0 && maybeCount<120000 && maybeCount>=vertCount*0.4){
-        let ok=true;
-        let maxIdx=0;
-        for(let j=0;j<Math.min(40,maybeCount);j++){
-          const idx=dv.getUint32(s+4+j*4,true);
-          if(idx>=vertCount){ ok=false; break; }
-          if(idx>maxIdx) maxIdx=idx;
-        }
-        if(ok && maxIdx>=vertCount*0.3){ // uses good range of verts
-          // check triangle area for first 3 tris
-          let areaOk=true;
-          for(let t=0;t<3;t++){
-            const ia=dv.getUint32(s+4+t*12,true), ib=dv.getUint32(s+4+t*12+4,true), ic=dv.getUint32(s+4+t*12+8,true);
-            if(ia>=vertCount||ib>=vertCount||ic>=vertCount){ areaOk=false; break; }
-            const ax=dv.getFloat32(posOff+ia*stride,true), ay=dv.getFloat32(posOff+ia*stride+4,true), az=dv.getFloat32(posOff+ia*stride+8,true);
-            const bx=dv.getFloat32(posOff+ib*stride,true), by=dv.getFloat32(posOff+ib*stride+4,true), bz=dv.getFloat32(posOff+ib*stride+8,true);
-            const cx=dv.getFloat32(posOff+ic*stride,true), cy=dv.getFloat32(posOff+ic*stride+4,true), cz=dv.getFloat32(posOff+ic*stride+8,true);
-            const abx=bx-ax, aby=by-ay, abz=bz-az;
-            const acx=cx-ax, acy=cy-ay, acz=cz-az;
-            const crossx=aby*acz-abz*acy, crossy=abz*acx-abx*acz, crossz=abx*acy-aby*acx;
-            const area=Math.sqrt(crossx*crossx+crossy*crossy+crossz*crossz)*0.5;
-            if(area<1e-5 || area>20){ areaOk=false; break; }
-          }
-          if(areaOk){ bestIb={off:s+4,count:maybeCount,isU16:false}; break; }
-        }
-      }
-      const c16 = dv.getUint16(s,true);
-      if(c16>=60 && c16<vertCount*4 && c16%3===0 && c16<120000 && c16>=vertCount*0.4){
-        let ok=true;
-        let maxIdx=0;
-        for(let j=0;j<Math.min(40,c16);j++){
-          const idx=dv.getUint16(s+2+j*2,true);
-          if(idx>=vertCount){ ok=false; break; }
-          if(idx>maxIdx) maxIdx=idx;
-        }
-        if(ok && maxIdx>=vertCount*0.3){
-          // area check for u16
-          let areaOk=true;
-          for(let t=0;t<2;t++){
-            const ia=dv.getUint16(s+2+t*6,true), ib=dv.getUint16(s+2+t*6+2,true), ic=dv.getUint16(s+2+t*6+4,true);
-            if(ia>=vertCount||ib>=vertCount||ic>=vertCount){ areaOk=false; break; }
-            const ax=dv.getFloat32(posOff+ia*stride,true), ay=dv.getFloat32(posOff+ia*stride+4,true), az=dv.getFloat32(posOff+ia*stride+8,true);
-            const bx=dv.getFloat32(posOff+ib*stride,true), by=dv.getFloat32(posOff+ib*stride+4,true), bz=dv.getFloat32(posOff+ib*stride+8,true);
-            const cx=dv.getFloat32(posOff+ic*stride,true), cy=dv.getFloat32(posOff+ic*stride+4,true), cz=dv.getFloat32(posOff+ic*stride+8,true);
-            const abx=bx-ax, aby=by-ay, abz=bz-az;
-            const acx=cx-ax, acy=cy-ay, acz=cz-az;
-            const crossx=aby*acz-abz*acy, crossy=abz*acx-abx*acz, crossz=abx*acy-aby*acx;
-            const area=Math.sqrt(crossx*crossx+crossy*crossy+crossz*crossz)*0.5;
-            if(area<1e-5 || area>20){ areaOk=false; break; }
-          }
-          if(areaOk){ bestIb={off:s+2,count:c16,isU16:true}; break; }
-        }
-      }
-    }
-    if(bestIb){ ibOff=bestIb.off; ibCount=bestIb.count; isU16=bestIb.isU16; }
-
-    const positions = new Float32Array(vertCount*3);
-    for(let i=0;i<vertCount;i++){
-      positions[i*3]=dv.getFloat32(posOff+i*stride,true);
-      positions[i*3+1]=dv.getFloat32(posOff+i*stride+4,true);
-      positions[i*3+2]=dv.getFloat32(posOff+i*stride+8,true);
-    }
-
-    let indices=null;
-    if(ibOff>=0 && ibCount>=30){
-      if(isU16){
-        indices=new Uint16Array(ibCount);
-        for(let i=0;i<ibCount;i++) indices[i]=dv.getUint16(ibOff+i*2,true);
-      }else{
-        if(vertCount>65535){
-          indices=new Uint32Array(ibCount);
-          for(let i=0;i<ibCount;i++) indices[i]=dv.getUint32(ibOff+i*4,true);
-        }else{
-          let need32=false;
-          for(let i=0;i<Math.min(100,ibCount);i++) if(dv.getUint32(ibOff+i*4,true)>=65535) need32=true;
-          if(need32){
-            indices=new Uint32Array(ibCount);
-            for(let i=0;i<ibCount;i++) indices[i]=dv.getUint32(ibOff+i*4,true);
-          }else{
-            indices=new Uint16Array(ibCount);
-            for(let i=0;i<ibCount;i++) indices[i]=dv.getUint32(ibOff+i*4,true);
-          }
-        }
-      }
-    }
-
-    geoms.push({
-      positions,
-      indices,
-      vertCount,
-      posOff,
-      ibOff,
-      ibCount,
-      isU16,
-      stride,
-      size: cand.size
-    });
-  }
-
-  if(!geoms.length) return {geometries:[], reason:`no valid mesh after ib check`};
-
-  // sort by size (prefer medium) and vertCount
-  geoms.sort((a,b)=> (b.vertCount - a.vertCount));
-  const best=geoms[0];
-  return {
-    geometries: geoms.slice(0,2), // return up to 2 best
-    reason: best.ibOff>=0 ? `verts ${best.vertCount} stride${best.stride} @${best.posOff} size ${best.size.toFixed(2)}m, ib ${best.ibCount} @${best.ibOff} ${best.isU16?'u16':'u32'}` : `verts ${best.vertCount} stride${best.stride} @${best.posOff} size ${best.size.toFixed(2)}m, no ib (points)`
-  };
+  const res=findMesh(decomp);
+  if(!res) return [];
+  return [res];
 }
 
 export function createThreeGeometry(THREE, desc){
-  const geo=new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(desc.positions,3));
-  if(desc.indices && desc.indices.length>=30){
-    geo.setIndex(new THREE.BufferAttribute(desc.indices,1));
-    geo.computeVertexNormals();
+  const geom=new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.BufferAttribute(desc.positions, 3));
+  if(desc.indices){
+    geom.setIndex(new THREE.BufferAttribute(desc.indices, 1));
+    geom.computeVertexNormals();
   }
-  geo.computeBoundingBox();
-  return geo;
+  geom.computeBoundingBox();
+  geom.computeBoundingSphere();
+  return geom;
 }
