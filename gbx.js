@@ -1,4 +1,3 @@
-// gbx.js — parse GBX Item, find mover, patch, build BUUR (handles both BUCR and BUUR)
 export function readU32(b,o){ return (b[o]|b[o+1]<<8|b[o+2]<<16|b[o+3]<<24)>>>0; }
 export function parseGBX(u8){
   if(String.fromCharCode(...u8.slice(0,3))!=='GBX') throw new Error('Not GBX');
@@ -9,121 +8,119 @@ export function parseGBX(u8){
   const comp=readU32(u8,bPtr+4);
   const cStart=bPtr+8, cEnd=cStart+comp;
   const classId=readU32(u8,9);
-  const fmt = String.fromCharCode(u8[7]||0); // 'B' for BUCR, 'U' for BUUR (byte 7 is format char in "BUCR"/"BUUR")
-  // Actually byte 7 is second char of "BUCR": B U C R, so byte 7 is 'U' for both? No, byte 4-7 is "GBX" + version, byte 7 is 'B' or 'U'?
-  // For BUCR, bytes 4-7 are 06 00 42 55 43 52? Wait spec: 0-2 "GBX", 3 version, 4-7 "BUCR" or "BUUR"
-  // Safer: detect by checking if byte 7 is 'U' (0x55) vs 'C' (0x43) for compressed
   const isBUUR = (u8[7]===0x55) || (comp===uncomp && cEnd<=u8.length && cEnd-cStart===uncomp);
-  return { hdrEnd, bPtr, uncomp, comp, cStart, cEnd, userSize, classId, origBytes:u8, isBUUR, fmtChar: String.fromCharCode(u8[7]) };
+  return { hdrEnd, bPtr, uncomp, comp, cStart, cEnd, userSize, classId, origBytes:u8, isBUUR };
 }
-
 function scoreCandidate(c, bufLen){
   let s=0;
   if(c.off>300) s+=1;
-  if(c.off<bufLen*0.8) s+=1;
-  if(c.ver===2||c.ver===3) s+=2;
-  else if(c.ver===1) s+=1;
-  if(c.rotP>=100&&c.rotP<=20000) s+=2;
-  if(c.transP>=100&&c.transP<=20000) s+=2;
-  if(c.rotMax===c.rotP) s+=1;
-  if(c.transMax===c.transP) s+=1;
-  if(c.axis>=0&&c.axis<=2) s+=1;
-  if(Math.abs(c.transY)>=0.1) s+=1;
-  if(Math.abs(c.rotAng)>=0.1) s+=1;
+  if(c.off<bufLen*0.85) s+=2;
+  if(c.rotP>=200&&c.rotP<=20000) s+=3; else if(c.rotP>=100) s+=1; else if(c.rotP>0&&c.rotP<50) s-=5;
+  if(c.transP>=200&&c.transP<=20000) s+=3; else if(c.transP>=100) s+=1; else if(c.transP>0&&c.transP<50) s-=5;
+  if(c.ver===2||c.ver===3) s+=3; else if(c.ver===1) s+=1;
+  if(c.rotMax===c.rotP&&c.rotP>0) s+=2;
+  if(c.transMax===c.transP&&c.transP>0) s+=2;
+  if(c.axis>=0&&c.axis<=2) s+=1; else s-=2;
+  if(Math.abs(c.transY)>=0.2&&Math.abs(c.transY)<=15) s+=2; else if(Math.abs(c.transY)>=0.05) s+=0.5; else if(c.transP>0) s-=2;
+  if(Math.abs(c.rotAng)>=0.2&&Math.abs(c.rotAng)<=10) s+=2; else if(Math.abs(c.rotAng)>=0.05) s+=0.5; else if(c.rotP>0) s-=1;
+  if(Math.abs(c.transY)<1e-6&&Math.abs(c.rotAng)<1e-6) s-=3;
+  if(c.rotP===1&&c.transP===1) s-=10;
+  // penalize tiny float that is actually int
+  if(Math.abs(c.transY)<1e-6 && c.transY!==0) s-=5;
   return s;
 }
-
 export function findMover(buf){
   const dv=new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
   let cands=[];
-  for(let off=0; off<buf.length-33; off++){
-    const ver=dv.getInt32(off,true);
-    if(ver<0||ver>6) continue;
-    const rotP=dv.getInt32(off+4,true), transP=dv.getInt32(off+8,true);
-    if(rotP<0||rotP>500000||transP<0||transP>500000) continue;
-    if(rotP===0&&transP===0) continue;
-    const transY=dv.getFloat32(off+12,true);
-    if(!Number.isFinite(transY)) continue;
-    if(Math.abs(transY)>500) continue;
-    const axis=dv.getInt32(off+16,true);
-    if(axis<0||axis>5) continue;
-    const rotMax=dv.getInt32(off+20,true), transMax=dv.getInt32(off+24,true);
-    if(rotMax<0||rotMax>500000||transMax<0||transMax>500000) continue;
-    const rf=buf[off+28];
-    if(rf>10) continue;
-    const ra=dv.getFloat32(off+29,true);
-    if(!Number.isFinite(ra)) continue;
-    if(Math.abs(ra)>1000) continue;
-    if(transP>0){
-      if(Math.abs(transY)<0.02 || Math.abs(transY)>30) continue;
-    }
-    if(rotP>0){
-      if(Math.abs(ra)<0.02 || Math.abs(ra)>10) continue;
-    }
-    const cand={off,ver,rotP,transP,transY,axis:Math.min(axis,2),rotMax,transMax,rotFunc:rf,rotAng:ra};
-    cand.score=scoreCandidate(cand, buf.length);
-    cands.push(cand);
-  }
-  if(cands.length){
-    cands.sort((a,b)=>b.score-a.score);
-    const best=cands.find(c=>c.off>400) || cands[0];
-    return best;
-  }
-  // Fallback: looser pass
-  for(let off=0; off<buf.length-33; off++){
+  for(let off=0; off<buf.length-16; off++){
     const ver=dv.getInt32(off,true);
     if(ver<0||ver>3) continue;
-    const rotP=dv.getInt32(off+4,true), transP=dv.getInt32(off+8,true);
-    if(rotP<=0 && transP<=0) continue;
-    if(rotP<0||rotP>20000||transP<0||transP>20000) continue;
+    const rotP=dv.getInt32(off+4,true);
+    const transP=dv.getInt32(off+8,true);
+    if(rotP<-1||rotP>500000||transP<-1||transP>500000) continue;
+    if(rotP<=0&&transP<=0) continue;
+    if(rotP===0&&transP===0) continue;
+    if(rotP>0&&rotP<100&&transP>0&&transP<100) continue;
+    if(rotP===1&&transP===1) continue;
     const transY=dv.getFloat32(off+12,true);
+    if(!Number.isFinite(transY)) continue;
+    if(Math.abs(transY)>200) continue;
+    // require plausible transY if transP>0
+    if(transP>=100 && Math.abs(transY)<0.05) continue;
+    if(transP>=100 && Math.abs(transY)>20) continue;
+    if(ver===0){
+      if((rotP>=100&&rotP<=50000)||(transP>=100&&transP<=50000)){
+        if(Math.abs(transY)>=0.05&&Math.abs(transY)<=20){
+          cands.push({off,ver,rotP,transP,transY,axis:1,rotMax:rotP,transMax:transP,rotFunc:0,rotAng:0,structSize:16});
+        }
+      }
+      continue;
+    }
+    if(off+20>buf.length) continue;
     const axis=dv.getInt32(off+16,true);
     if(axis<0||axis>2) continue;
-    const rotMax=dv.getInt32(off+20,true), transMax=dv.getInt32(off+24,true);
+    if(ver===1){
+      cands.push({off,ver,rotP,transP,transY,axis,rotMax:rotP,transMax:transP,rotFunc:0,rotAng:0,structSize:20});
+      continue;
+    }
+    if(off+28>buf.length) continue;
+    const rotMax=dv.getInt32(off+20,true);
+    const transMax=dv.getInt32(off+24,true);
+    if(rotMax<-1||rotMax>500000||transMax<-1||transMax>500000) continue;
+    if(ver===2){
+      cands.push({off,ver,rotP,transP,transY,axis,rotMax:rotMax||rotP,transMax:transMax||transP,rotFunc:0,rotAng:0,structSize:28});
+      continue;
+    }
+    if(off+33>buf.length) continue;
     const rf=buf[off+28];
+    if(rf>8) continue;
     const ra=dv.getFloat32(off+29,true);
-    if(!Number.isFinite(transY)||!Number.isFinite(ra)) continue;
-    return {off,ver,rotP,transP,transY: Math.abs(transY)>0.01?transY:1.5, axis, rotMax: rotMax||rotP, transMax: transMax||transP, rotFunc: rf<=3?rf:0, rotAng: Math.abs(ra)>0.01?ra:1.57, score:0, fallback:true};
+    if(!Number.isFinite(ra)) continue;
+    if(Math.abs(ra)>100) continue;
+    if(rotP>=100 && Math.abs(ra)<0.05) continue;
+    cands.push({off,ver,rotP,transP,transY,axis,rotMax:rotMax||rotP,transMax:transMax||transP,rotFunc:rf,rotAng:ra,structSize:33});
   }
-  throw new Error('No mover found – static item or unknown layout. Using default IR.');
+  if(cands.length){
+    for(const c of cands) c.score=scoreCandidate(c, buf.length);
+    cands.sort((a,b)=>b.score-a.score);
+    const best=cands[0];
+    if(best.score>=3) return best;
+    // if best score low, treat as not found to avoid false positive
+    throw new Error('No high-confidence mover – best score '+best.score.toFixed(1)+' at off '+best.off+' ver '+best.ver+' rotP '+best.rotP+' transP '+best.transP);
+  }
+  throw new Error('No mover found – static item or unknown layout.');
 }
-
 export function patchMover(decomp, off, mover){
-  if(off<0 || off+33> decomp.length){
-    return false;
-  }
+  if(off<0||off+33>decomp.length) return false;
   const dv=new DataView(decomp.buffer, decomp.byteOffset, decomp.byteLength);
-  dv.setInt32(off, mover.ver??2, true);
+  const ver=mover.ver??2;
+  dv.setInt32(off, ver, true);
   dv.setInt32(off+4, Math.round(mover.rotP), true);
   dv.setInt32(off+8, Math.round(mover.transP), true);
   dv.setFloat32(off+12, mover.transY, true);
-  dv.setInt32(off+16, mover.axis, true);
-  dv.setInt32(off+20, Math.round(mover.rotMax??mover.rotP), true);
-  dv.setInt32(off+24, Math.round(mover.transMax??mover.transP), true);
-  decomp[off+28]=mover.rotFunc??0;
-  dv.setFloat32(off+29, mover.rotAng, true);
+  if(ver>=1) dv.setInt32(off+16, mover.axis, true);
+  if(ver>=2){
+    dv.setInt32(off+20, Math.round(mover.rotMax??mover.rotP), true);
+    dv.setInt32(off+24, Math.round(mover.transMax??mover.transP), true);
+  }
+  if(ver>=3){
+    decomp[off+28]=mover.rotFunc??0;
+    dv.setFloat32(off+29, mover.rotAng, true);
+  }
   return true;
 }
-
 export function buildBUUR(origBytes, bodyPtr, decomp){
-  const header = origBytes.slice(0, bodyPtr);
-  const out = new Uint8Array(header.length + 8 + decomp.length);
+  const header=origBytes.slice(0, bodyPtr);
+  const out=new Uint8Array(header.length+8+decomp.length);
   out.set(header,0);
   const dv=new DataView(out.buffer);
   dv.setUint32(bodyPtr, decomp.length, true);
   dv.setUint32(bodyPtr+4, decomp.length, true);
   out.set(decomp, bodyPtr+8);
-  if(out.length>7) out[7]=0x55; // 'U' -> BUUR
+  if(out.length>7) out[7]=0x55;
   return out;
 }
-
-// Helper to get decomp from either BUCR (needs lzo) or BUUR (raw)
 export function getDecompBytes(origBytes, parsed, decompressFn){
-  if(parsed.isBUUR){
-    // body is uncompressed already
-    return origBytes.slice(parsed.bPtr+8, parsed.bPtr+8+parsed.uncomp);
-  }else{
-    const comp=origBytes.slice(parsed.cStart, parsed.cEnd);
-    return decompressFn(comp, parsed.uncomp);
-  }
+  if(parsed.isBUUR) return origBytes.slice(parsed.bPtr+8, parsed.bPtr+8+parsed.uncomp);
+  return decompressFn(origBytes.slice(parsed.cStart, parsed.cEnd), parsed.uncomp);
 }
