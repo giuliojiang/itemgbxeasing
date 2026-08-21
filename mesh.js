@@ -137,7 +137,7 @@ export function findMesh(decomp) {
     if(cnt>800){
       console.log(`  cand ${cnt}@${cand.offset} s${stride} v0 ${getPosStrided(posOff,stride,0).map(x=>x.toFixed(3)).join(',')} v1 ${getPosStrided(posOff,stride,1).map(x=>x.toFixed(3)).join(',')} v2 ${getPosStrided(posOff,stride,2).map(x=>x.toFixed(3)).join(',')}`);
     }
-    for(let s=after; s<Math.min(len-16, after+800); s++){
+    for(let s=after; s<Math.min(len-16, after+100000); s++){
       const v=dv.getInt32(s,true);
       if(v===0x09057001 || v===0x09057000){
         const isNew=(v===0x09057001);
