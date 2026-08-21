@@ -27,7 +27,8 @@ export function validateIR(ir){
       if(a.delayMs!=null && (typeof a.delayMs!=="number"||a.delayMs<0||a.delayMs>20000)) errors.push(`${pre}.delayMs must be 0..20000`);
       if(!ALLOWED_EASING.includes(a.easing)) errors.push(`${pre}.easing must be ${ALLOWED_EASING.join("|")}, got ${a.easing}`);
       if(a.loop && !ALLOWED_LOOP.includes(a.loop)) warnings.push(`${pre}.loop should be ${ALLOWED_LOOP.join("|")}`);
-      if(a.property==="translation" && a.axis!=="y") warnings.push(`${pre} translation on ${a.axis} – game mover only translates Y, will be baked as Y`);
+      if(a.property==="translation" && !ALLOWED_AXIS.includes(a.axis)) errors.push(`${pre} translation axis invalid`);
+      // old format (KC) can translate X/Y/Z, new format only Y – allow all, baking will handle
     });
   }
   if(ir.composition){

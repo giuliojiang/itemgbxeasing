@@ -127,7 +127,7 @@ async function loadFile(f){
     $('irCard').style.display='block';
     $('previewCard').style.display='block';
     $('exportCard').style.display='block';
-    $('foundPill').textContent = mover?`mover @${moverOff} RotP ${mover.rotP} TransP ${mover.transP}`:'no mover – static';
+    $('foundPill').textContent = mover? (mover.type==="old"?`KC @${mover.off} Trans ${mover.transMin}→${mover.transMax} X Rot ${mover.angleMin}→${mover.angleMax}°`:`mover @${moverOff} RotP ${mover.rotP} TransP ${mover.transP}`) :'no mover – static';
     setStatus('Ready – edit IR or paste from AI, then Check');
     setMeta(`${f.name} ${ab.byteLength} → decomp ${out.length}`);
   }catch(e){ setStatus('Error: '+e.message); console.error(e); }
@@ -168,10 +168,17 @@ $('copyIR').addEventListener('click',()=>{
 $('exportBtn').addEventListener('click',()=>{
   if(!irObj||!decomp||!origBytes){ alert('Load a GBX first'); return; }
   try{
-    const mover=irToMover(irObj);
+    const mover=irToMover(irObj, baseMover);
     // patch copy of decomp
     const out=new Uint8Array(decomp);
-    if(moverOff>=0) patchMover(out, moverOff, mover);
+    if(moverOff>=0 || mover.type==="old"){
+      if(mover.type==="old"){
+        // old needs full mover with offs, patchMover uses mover itself
+        patchMover(out, mover.off, mover);
+      } else {
+        patchMover(out, moverOff, mover);
+      }
+    }
     else{
       // if no mover originally, we can't inject safely – warn
       alert('This item had no mover originally – cannot inject new mover safely in v1. Add a mover manually in game then reload.');
@@ -182,7 +189,7 @@ $('exportBtn').addEventListener('click',()=>{
     const url=URL.createObjectURL(blob);
     const a=document.createElement('a'); a.href=url; a.download=fileName.replace(/\.Gbx$/i,'')+'_mod.Item.Gbx'; a.click();
     URL.revokeObjectURL(url);
-    $('bakeLog').textContent=`Exported RotP ${mover.rotP} TransP ${mover.transP} TransY ${mover.transY.toFixed(2)} RotA ${mover.rotAng.toFixed(2)}`;
+    $('bakeLog').textContent=`Exported ${mover.type==="old"?`Trans ${mover.transMin?.toFixed(1)}→${mover.transMax?.toFixed(1)} Rot ${mover.angleMin?.toFixed(0)}→${mover.angleMax?.toFixed(0)}`:`RotP ${mover.rotP} TransP ${mover.transP} TransY ${mover.transY.toFixed(2)} RotA ${mover.rotAng.toFixed(2)}`}`;
   }catch(e){ alert('Export failed: '+e.message); console.error(e); }
 });
 
@@ -209,13 +216,26 @@ function animate(){
   controls.update();
   if(irObj){
     const t=clock.getElapsedTime()*1000;
-    const {transY,rot,axis}=sampleIR(irObj,t);
+    const s=sampleIR(irObj,t);
     if(itemRoot){
-      itemRoot.position.y=transY;
-      itemRoot.rotation.x=0; itemRoot.rotation.y=0; itemRoot.rotation.z=0;
-      if(axis==='x') itemRoot.rotation.x=rot;
-      else if(axis==='z') itemRoot.rotation.z=rot;
-      else itemRoot.rotation.y=rot;
+      // new: use vec if available, fallback to legacy single axis
+      if(s.trans){
+        itemRoot.position.x=s.trans.x||0;
+        itemRoot.position.y=s.trans.y||0;
+        itemRoot.position.z=s.trans.z||0;
+      }else{
+        itemRoot.position.y=s.transY||0;
+      }
+      if(s.rotVec){
+        itemRoot.rotation.x=s.rotVec.x||0;
+        itemRoot.rotation.y=s.rotVec.y||0;
+        itemRoot.rotation.z=s.rotVec.z||0;
+      }else{
+        itemRoot.rotation.x=0; itemRoot.rotation.y=0; itemRoot.rotation.z=0;
+        if(s.axis==='x') itemRoot.rotation.x=s.rot;
+        else if(s.axis==='z') itemRoot.rotation.z=s.rot;
+        else itemRoot.rotation.y=s.rot;
+      }
     }
   }
   renderer.render(scene,camera);
